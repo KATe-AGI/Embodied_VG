@@ -1,0 +1,60 @@
+# Python caches and local environment files
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+env/
+.env
+.env.*
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Datasets and collected sensor data
+plug_dataset_all_20260520/
+extra/
+hand_eye_calibration/eye_hand_data/**/*
+!hand_eye_calibration/eye_hand_data/
+!hand_eye_calibration/eye_hand_data/calib_20260522/
+!hand_eye_calibration/eye_hand_data/calib_20260522/hand_eye_result_in-hand.yaml
+!hand_eye_calibration/eye_hand_data/calib_20260522/hand_eye_result_in-hand.json
+
+# Original README illustration/reference images from the upstream hand-eye repo
+hand_eye_calibration/picture/
+
+# Training/inference outputs
+runs/
+**/runs/
+outputs/
+output/
+logs/
+*.log
+
+# Model weights and exported model artifacts
+*.pt
+*.pth
+*.onnx
+*.engine
+*.torchscript
+*.tflite
+*.pb
+*.bin
+*.param
+*.mlmodel
+
+# Generated media and point clouds
+*.ply
+*.mp4
+*.avi
+*.mov
+
+# Nested repository metadata should not be committed into the root repo
+**/.git/

@@ -1,0 +1,213 @@
+#!/usr/bin/env python3
+"""Run single-frame plug 6D grasp inference for real-machine validation."""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+from typing import Any
+
+import cv2
+import numpy as np
+
+from plug_vg.config import DEFAULT_CAMERA, DEFAULT_POSE_WEIGHTS, DEFAULT_SEG_WEIGHTS, ROOT, load_camera
+from plug_vg.geometry import draw_overlay as draw_3d_overlay, save_ply
+from plug_vg.grasp_pose import estimate_record
+from plug_vg.io import raw_id_from_image, write_json
+from plug_vg.robot_transform import convert_camera_grasp_to_base, load_hand_eye_matrix, robot_pose_to_matrix
+from plug_vg.vision import draw_overlay as draw_stage1_overlay, run_models
+
+from infer import YOLO
+
+'''
+python infer_6d_single.py \
+  --rgb /home/stoor/桌面/LY/proj/Embodied_VG/plug_dataset_all_20260520/rgbd_test/color/color_20260519_173853_538_3.png \
+  --d2rgb /home/stoor/桌面/LY/proj/Embodied_VG/plug_dataset_all_20260520/rgbd_test/D2RGB/D2RGB_20260519_173853_538_3.png \
+  --robot-pose 0.312 -0.085 0.426 3.1416 0.0000 1.5708 \
+  --output-dir /home/stoor/桌面/LY/proj/Embodied_VG/ultralytics/runs/plug_6d_single \
+  --save-overlay \
+  --save-ply
+'''
+
+DEFAULT_OUTPUT = ROOT / "ultralytics" / "runs" / "plug_6d_single"
+DEFAULT_HAND_EYE = ROOT / "hand_eye_calibration" / "eye_hand_data" / "calib_20260522" / "hand_eye_result_in-hand.yaml"
+DEFAULT_ROBOT_CONFIG = ROOT / "configs" / "robot" / "cs_robot.yaml"
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--rgb", type=Path, required=True, help="RGB image path.")
+    parser.add_argument("--d2rgb", type=Path, required=True, help="Registered D2RGB depth PNG path.")
+    parser.add_argument(
+        "--robot-pose",
+        type=float,
+        nargs=6,
+        required=True,
+        metavar=("X", "Y", "Z", "ROLL", "PITCH", "YAW"),
+        help="Current robot end-effector pose T_base_end as x y z roll pitch yaw in meters/radians.",
+    )
+    parser.add_argument("--output-dir", type=Path, required=True, help="Directory for JSON and optional debug artifacts.")
+    parser.add_argument("--seg-weights", type=Path, default=DEFAULT_SEG_WEIGHTS, help="Segmentation weights.")
+    parser.add_argument("--pose-weights", type=Path, default=DEFAULT_POSE_WEIGHTS, help="Pose weights.")
+    parser.add_argument("--camera-config", type=Path, default=DEFAULT_CAMERA, help="RGB-D camera intrinsics YAML.")
+    parser.add_argument("--hand-eye-config", type=Path, default=DEFAULT_HAND_EYE, help="Eye-in-hand calibration YAML containing T_end_camera.")
+    parser.add_argument("--robot-config", type=Path, default=DEFAULT_ROBOT_CONFIG, help="Robot config YAML.")
+    parser.add_argument("--imgsz", type=int, default=640, help="YOLO inference image size.")
+    parser.add_argument("--conf", type=float, default=0.25, help="YOLO confidence threshold.")
+    parser.add_argument("--iou", type=float, default=0.7, help="YOLO IoU threshold.")
+    parser.add_argument("--device", default=None, help="CUDA device, e.g. 0, or cpu.")
+    parser.add_argument("--max-det", type=int, default=10, help="Maximum detections per YOLO model.")
+    parser.add_argument("--min-depth", type=float, default=0.1, help="Minimum valid depth in meters.")
+    parser.add_argument("--max-depth", type=float, default=1.0, help="Maximum valid depth in meters.")
+    parser.add_argument("--min-points", type=int, default=200, help="Minimum filtered mask point count.")
+    parser.add_argument("--keypoint-window", type=int, default=5, help="Odd pixel window size for keypoint depth lookup.")
+    parser.add_argument("--plane-threshold", type=float, default=0.004, help="RANSAC plane inlier threshold in meters.")
+    parser.add_argument("--ransac-iters", type=int, default=128, help="RANSAC plane iterations.")
+    parser.add_argument("--head-tail-tolerance", type=float, default=0.35, help="Relative tolerance for 3D head-tail distance.")
+    parser.add_argument("--axis-scale", type=float, default=0.1, help="Overlay XYZ axis length in meters.")
+    parser.add_argument("--axis-thickness", type=int, default=5, help="Overlay XYZ axis line thickness in pixels.")
+    parser.add_argument("--save-overlay", action="store_true", help="Save YOLO and 3D grasp overlays.")
+    parser.add_argument("--save-ply", action="store_true", help="Save filtered mask point cloud as an ASCII PLY file.")
+    return parser.parse_args()
+
+
+def output_json_path(output_dir: Path, rgb_path: Path) -> Path:
+    return output_dir / f"{rgb_path.stem}_6d_base.json"
+
+
+def make_failure(args: argparse.Namespace, reason: str, warnings: list[str] | None = None) -> dict[str, Any]:
+    return {
+        "status": "failed",
+        "reason": reason,
+        "warnings": warnings or [],
+        "input": {
+            "image": str(args.rgb),
+            "d2rgb": str(args.d2rgb),
+            "robot_pose_xyzypr_m_rad": [float(v) for v in args.robot_pose],
+        },
+    }
+
+
+def single_stage1_record(image_path: Path, image_bgr: np.ndarray, seg_items: list[dict], pose_items: list[dict], stage1_json: Path) -> dict:
+    return {
+        "type": "image",
+        "image": str(image_path),
+        "width": int(image_bgr.shape[1]),
+        "height": int(image_bgr.shape[0]),
+        "segmentation": seg_items,
+        "pose": pose_items,
+        "_stage1_json": str(stage1_json),
+    }
+
+
+def print_result(result: dict[str, Any], output_path: Path) -> None:
+    print(f"status: {result.get('status')}")
+    if result.get("status") == "ok":
+        pose = (result.get("grasp_pose_base") or {}).get("robot_pose_xyzypr_m_rad")
+        print(f"grasp_pose_base.robot_pose_xyzypr_m_rad: {pose}")
+        warnings = result.get("warnings") or []
+        if warnings:
+            print(f"warnings: {warnings}")
+    else:
+        print(f"reason: {result.get('reason')}")
+        warnings = result.get("warnings") or []
+        if warnings:
+            print(f"warnings: {warnings}")
+    print(f"json: {output_path}")
+
+
+def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    json_path = output_json_path(args.output_dir, args.rgb)
+    args.dataset = args.d2rgb.parent.parent
+
+    if not args.rgb.is_file():
+        result = make_failure(args, "rgb_missing")
+        write_json(json_path, result)
+        return result, json_path
+    if not args.d2rgb.is_file():
+        result = make_failure(args, "d2rgb_missing")
+        write_json(json_path, result)
+        return result, json_path
+
+    image = cv2.imread(str(args.rgb))
+    if image is None:
+        result = make_failure(args, "rgb_unreadable")
+        write_json(json_path, result)
+        return result, json_path
+
+    depth_probe = cv2.imread(str(args.d2rgb), cv2.IMREAD_UNCHANGED)
+    if depth_probe is None:
+        result = make_failure(args, "d2rgb_unreadable")
+        write_json(json_path, result)
+        return result, json_path
+
+    stage1_dir = args.output_dir / "stage1_jsons"
+    overlay_dir = args.output_dir / "overlays"
+    ply_dir = args.output_dir / "ply"
+    stage1_json = stage1_dir / f"{args.rgb.stem}.json"
+
+    camera = load_camera(args.camera_config)
+    t_end_camera = load_hand_eye_matrix(args.hand_eye_config)
+    t_base_end = robot_pose_to_matrix(args.robot_pose)
+
+    seg_model = YOLO(str(args.seg_weights))
+    pose_model = YOLO(str(args.pose_weights))
+    seg_items, pose_items = run_models(image, seg_model, pose_model, args)
+
+    record = single_stage1_record(args.rgb, image, seg_items, pose_items, stage1_json)
+    write_json(stage1_json, record)
+    if args.save_overlay:
+        overlay_dir.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(overlay_dir / f"{args.rgb.stem}_stage1.jpg"), draw_stage1_overlay(image, seg_items, pose_items))
+
+    raw_id = raw_id_from_image(str(args.rgb)) or args.rgb.stem
+    manifest = {raw_id: args.d2rgb}
+    result, mask, points, rotation, _head_xy, _tail_xy = estimate_record(record, camera, manifest, args)
+
+    if result.get("status") == "ok":
+        result = convert_camera_grasp_to_base(
+            result,
+            t_base_end,
+            t_end_camera,
+            args.hand_eye_config,
+            args.robot_config,
+        )
+        if args.save_overlay and mask is not None and rotation is not None:
+            center = np.asarray(result["grasp_pose_camera"]["translation_m"], dtype=np.float32)
+            draw_3d_overlay(record, mask, center, rotation, camera, overlay_dir / f"{args.rgb.stem}_grasp3d.jpg", args.axis_scale, args.axis_thickness)
+        if args.save_ply and points is not None:
+            save_ply(points, ply_dir / f"{args.rgb.stem}_points.ply")
+
+    result.setdefault("input", {})
+    result["input"].update(
+        {
+            "image": str(args.rgb),
+            "d2rgb": str(args.d2rgb),
+            "robot_pose_xyzypr_m_rad": [float(v) for v in args.robot_pose],
+        }
+    )
+    write_json(json_path, result)
+    return result, json_path
+
+
+def main() -> None:
+    args = parse_args()
+    try:
+        result, json_path = run(args)
+    except Exception as exc:
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+        json_path = output_json_path(args.output_dir, args.rgb)
+        result = make_failure(args, type(exc).__name__, [str(exc)])
+        write_json(json_path, result)
+        print_result(result, json_path)
+        raise SystemExit(1) from exc
+
+    print_result(result, json_path)
+    if result.get("status") != "ok":
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()

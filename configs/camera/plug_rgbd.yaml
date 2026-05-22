@@ -1,0 +1,18 @@
+# Camera intrinsics used by grasp_3d.py.
+#
+# The 6D grasp pipeline reads plug_dataset/rgbd_test/D2RGB/D2RGB_*.png.
+# D2RGB depth images are registered into the RGB image plane, so their pixel
+# coordinates match rgbd_test/color images and LabelMe annotations at 1920 x 1080.
+
+camera_frame: camera_rgb
+depth_image: D2RGB
+image_width: 1920
+image_height: 1080
+
+fx: 1171.5
+fy: 1172.6
+cx: 1012.3
+cy: 541.94
+
+# Raw D2RGB uint16 values are millimeters.
+depth_scale: 0.001

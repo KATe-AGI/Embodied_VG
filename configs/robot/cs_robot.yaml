@@ -1,0 +1,18 @@
+robot_type: CS
+pose_provider: realtime_placeholder
+
+connection:
+  host: ""
+  port: 8080
+  protocol: socket_json
+
+pose_convention:
+  vector_order: [x, y, z, roll, pitch, yaw]
+  translation_unit: meter
+  rotation_unit: radian
+  rpy_type: fixed_axis_xyz
+  rotation_matrix: R = Rz(yaw) @ Ry(pitch) @ Rx(roll)
+
+realtime_provider:
+  implemented: false
+  note: Use --robot-pose x y z roll pitch yaw until the robot SDK/socket provider is implemented.

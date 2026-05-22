@@ -1,0 +1,118 @@
+mode: in-hand
+method: TSAI
+transform_name: T_end_camera
+data_dir: /home/stoor/桌面/LY/proj/Embodied_VG/hand_eye_calibration/eye_hand_data/calib_20260522
+config: /home/stoor/桌面/LY/proj/Embodied_VG/hand_eye_calibration/config.yaml
+checkerboard:
+  XX: 11
+  YY: 8
+  L: 0.03
+image_size:
+  width: 1920
+  height: 1080
+matrix_4x4:
+- - 0.99966962
+  - 0.02504737
+  - 0.00576963
+  - -0.01976874
+- - -0.02467902
+  - 0.99807485
+  - -0.0568993
+  - 0.09775506
+- - -0.0071837
+  - 0.05673811
+  - 0.99836325
+  - 0.08985208
+- - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+rotation_matrix:
+- - 0.99966962
+  - 0.02504737
+  - 0.00576963
+- - -0.02467902
+  - 0.99807485
+  - -0.0568993
+- - -0.0071837
+  - 0.05673811
+  - 0.99836325
+translation_m:
+- -0.01976874
+- 0.09775506
+- 0.08985208
+quaternion_xyzw:
+- 0.02842318
+- 0.00323991
+- -0.01243765
+- 0.99951335
+euler_xyz_deg:
+- 3.25268507
+- 0.41159926
+- -1.41418357
+camera_calibration_rms: 0.23834609
+camera_matrix:
+- - 1178.04186936
+  - 0.0
+  - 1011.50752707
+- - 0.0
+  - 1177.48945896
+  - 545.61949707
+- - 0.0
+  - 0.0
+  - 1.0
+dist_coeffs:
+- -0.02140631
+- -0.21963553
+- 0.00038527
+- 8.704e-05
+- 0.09319403
+reprojection_error_mean_px: 0.02514925
+used_images:
+- index: 1
+  file: 1.jpg
+  reprojection_error_px: 0.02912809
+- index: 2
+  file: 2.jpg
+  reprojection_error_px: 0.0216988
+- index: 3
+  file: 3.jpg
+  reprojection_error_px: 0.0244232
+- index: 4
+  file: 4.jpg
+  reprojection_error_px: 0.02937063
+- index: 5
+  file: 5.jpg
+  reprojection_error_px: 0.02813647
+- index: 6
+  file: 6.jpg
+  reprojection_error_px: 0.02152417
+- index: 7
+  file: 7.jpg
+  reprojection_error_px: 0.02595989
+- index: 8
+  file: 8.jpg
+  reprojection_error_px: 0.02004064
+- index: 9
+  file: 9.jpg
+  reprojection_error_px: 0.01805257
+- index: 10
+  file: 10.jpg
+  reprojection_error_px: 0.02648832
+- index: 11
+  file: 11.jpg
+  reprojection_error_px: 0.02924567
+- index: 12
+  file: 12.jpg
+  reprojection_error_px: 0.0252694
+- index: 13
+  file: 13.jpg
+  reprojection_error_px: 0.02760243
+failed_images: []
+ignored_images: []
+pose_convention:
+  row_format: x,y,z,rx,ry,rz
+  translation_unit: meter
+  rotation_unit: radian
+  robot_pose: T_base_end
+  euler_order: R = Rz @ Ry @ Rx
