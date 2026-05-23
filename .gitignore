@@ -21,6 +21,7 @@ Thumbs.db
 # Datasets and collected sensor data
 plug_dataset_all_20260520/
 extra/
+test_*/
 hand_eye_calibration/eye_hand_data/**/*
 !hand_eye_calibration/eye_hand_data/
 !hand_eye_calibration/eye_hand_data/calib_20260522/

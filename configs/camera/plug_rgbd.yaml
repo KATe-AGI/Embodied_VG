@@ -1,4 +1,4 @@
-# Camera intrinsics used by grasp_3d.py.
+# Camera intrinsics used by the RGB-D 6D grasp pipeline.
 #
 # The 6D grasp pipeline reads plug_dataset/rgbd_test/D2RGB/D2RGB_*.png.
 # D2RGB depth images are registered into the RGB image plane, so their pixel

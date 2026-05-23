@@ -69,10 +69,10 @@ def rotation_to_rpy_xyz(rotation: np.ndarray) -> list[float]:
     return [float(roll), float(pitch), float(yaw)]
 
 
-def robot_pose_to_matrix(pose_xyzypr_m_rad: list[float] | tuple[float, ...]) -> np.ndarray:
-    if len(pose_xyzypr_m_rad) != 6:
-        raise ValueError(f"Robot pose must have 6 values [x,y,z,roll,pitch,yaw], got {len(pose_xyzypr_m_rad)}")
-    x, y, z, roll, pitch, yaw = [float(value) for value in pose_xyzypr_m_rad]
+def robot_pose_to_matrix(pose_xyzrpy_m_rad: list[float] | tuple[float, ...]) -> np.ndarray:
+    if len(pose_xyzrpy_m_rad) != 6:
+        raise ValueError(f"Robot pose must have 6 values [x,y,z,roll,pitch,yaw], got {len(pose_xyzrpy_m_rad)}")
+    x, y, z, roll, pitch, yaw = [float(value) for value in pose_xyzrpy_m_rad]
     matrix = np.eye(4, dtype=np.float64)
     matrix[:3, :3] = rpy_xyz_to_rotation(roll, pitch, yaw)
     matrix[:3, 3] = [x, y, z]
@@ -102,7 +102,9 @@ def pose_dict_to_matrix(pose: dict[str, Any]) -> np.ndarray:
 
 
 def round_list(values: Any, digits: int = 8) -> list[Any]:
-    return np.round(np.asarray(values, dtype=np.float64), digits).tolist()
+    rounded = np.round(np.asarray(values, dtype=np.float64), digits)
+    rounded[np.isclose(rounded, 0.0, atol=10.0 ** -digits)] = 0.0
+    return rounded.tolist()
 
 
 def convert_camera_grasp_to_base(
@@ -123,14 +125,18 @@ def convert_camera_grasp_to_base(
     rotation = t_base_grasp[:3, :3]
     translation = t_base_grasp[:3, 3]
     rpy = rotation_to_rpy_xyz(rotation)
+    rpy_deg = np.degrees(np.asarray(rpy, dtype=np.float64))
     robot_pose = [float(translation[0]), float(translation[1]), float(translation[2]), *rpy]
+    robot_pose_deg = [float(translation[0]), float(translation[1]), float(translation[2]), *rpy_deg.tolist()]
 
     result["grasp_pose_base"] = {
         "translation_m": round_list(translation),
         "rotation_matrix": round_list(rotation),
         "quaternion_xyzw": rotation_to_quaternion_xyzw(rotation),
         "rpy_xyz_rad": round_list(rpy),
-        "robot_pose_xyzypr_m_rad": round_list(robot_pose),
+        "rpy_xyz_deg": round_list(rpy_deg),
+        "robot_pose_xyzrpy_m_rad": round_list(robot_pose),
+        "robot_pose_xyzrpy_m_deg": round_list(robot_pose_deg),
     }
     result["frame_transform"] = {
         "chain": "T_base_grasp = T_base_end_current @ T_end_camera @ T_camera_grasp",

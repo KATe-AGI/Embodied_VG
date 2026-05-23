@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -22,9 +23,9 @@ from infer import YOLO
 
 '''
 python infer_6d_single.py \
-  --rgb /home/stoor/桌面/LY/proj/Embodied_VG/plug_dataset_all_20260520/rgbd_test/color/color_20260519_173853_538_3.png \
-  --d2rgb /home/stoor/桌面/LY/proj/Embodied_VG/plug_dataset_all_20260520/rgbd_test/D2RGB/D2RGB_20260519_173853_538_3.png \
-  --robot-pose 0.312 -0.085 0.426 3.1416 0.0000 1.5708 \
+  --rgb test_20260522/color_20260522_200225_861_0.png \
+  --d2rgb test_20260522/D2RGB_20260522_200225_861_0.png \
+  --robot-pose -0.812395 -0.033168 0.567694 -1.911869 0.253467 1.720176 \
   --output-dir /home/stoor/桌面/LY/proj/Embodied_VG/ultralytics/runs/plug_6d_single \
   --save-overlay \
   --save-ply
@@ -84,7 +85,7 @@ def make_failure(args: argparse.Namespace, reason: str, warnings: list[str] | No
         "input": {
             "image": str(args.rgb),
             "d2rgb": str(args.d2rgb),
-            "robot_pose_xyzypr_m_rad": [float(v) for v in args.robot_pose],
+            "robot_pose_xyzrpy_m_rad": [float(v) for v in args.robot_pose],
         },
     }
 
@@ -104,8 +105,11 @@ def single_stage1_record(image_path: Path, image_bgr: np.ndarray, seg_items: lis
 def print_result(result: dict[str, Any], output_path: Path) -> None:
     print(f"status: {result.get('status')}")
     if result.get("status") == "ok":
-        pose = (result.get("grasp_pose_base") or {}).get("robot_pose_xyzypr_m_rad")
-        print(f"grasp_pose_base.robot_pose_xyzypr_m_rad: {pose}")
+        pose_base = result.get("grasp_pose_base") or {}
+        pose_rad = pose_base.get("robot_pose_xyzrpy_m_rad")
+        pose_deg = pose_base.get("robot_pose_xyzrpy_m_deg")
+        print(f"grasp_pose_base.robot_pose_xyzrpy_m_rad: {pose_rad}")
+        print(f"grasp_pose_base.robot_pose_xyzrpy_m_deg: {pose_deg}")
         warnings = result.get("warnings") or []
         if warnings:
             print(f"warnings: {warnings}")
@@ -115,6 +119,9 @@ def print_result(result: dict[str, Any], output_path: Path) -> None:
         if warnings:
             print(f"warnings: {warnings}")
     print(f"json: {output_path}")
+    timing = result.get("timing") or {}
+    if timing:
+        print(f"Timing: single end-to-end = {timing.get('single_end_to_end_s')} (s)")
 
 
 def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
@@ -185,7 +192,7 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
         {
             "image": str(args.rgb),
             "d2rgb": str(args.d2rgb),
-            "robot_pose_xyzypr_m_rad": [float(v) for v in args.robot_pose],
+            "robot_pose_xyzrpy_m_rad": [float(v) for v in args.robot_pose],
         }
     )
     write_json(json_path, result)
@@ -194,16 +201,34 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
 
 def main() -> None:
     args = parse_args()
+    start_time = time.perf_counter()
     try:
         result, json_path = run(args)
     except Exception as exc:
         args.output_dir.mkdir(parents=True, exist_ok=True)
         json_path = output_json_path(args.output_dir, args.rgb)
         result = make_failure(args, type(exc).__name__, [str(exc)])
+        elapsed = time.perf_counter() - start_time
+        result["timing"] = {
+            "single_end_to_end_s": round(float(elapsed), 6),
+            "single_end_to_end_ms": round(float(elapsed * 1000.0), 3),
+            "scope": "rgbd_input_to_base_6d_pose",
+            "includes_model_loading": True,
+            "includes_debug_artifact_writes": bool(args.save_overlay or args.save_ply),
+        }
         write_json(json_path, result)
         print_result(result, json_path)
         raise SystemExit(1) from exc
 
+    elapsed = time.perf_counter() - start_time
+    result["timing"] = {
+        "single_end_to_end_s": round(float(elapsed), 6),
+        "single_end_to_end_ms": round(float(elapsed * 1000.0), 3),
+        "scope": "rgbd_input_to_base_6d_pose",
+        "includes_model_loading": True,
+        "includes_debug_artifact_writes": bool(args.save_overlay or args.save_ply),
+    }
+    write_json(json_path, result)
     print_result(result, json_path)
     if result.get("status") != "ok":
         raise SystemExit(1)

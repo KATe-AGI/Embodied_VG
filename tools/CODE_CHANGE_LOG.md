@@ -1,5 +1,19 @@
 # 代码修改日志
 
+## 2026-05-23 - 移除旧版 grasp_3d.py 入口
+
+### 背景
+
+`grasp_3d.py` 原本用于读取已经保存好的 stage1 JSON，再结合 D2RGB 深度图输出相机坐标系下的 3D 抓取位姿。
+当前核心几何逻辑已经下沉到 `plug_vg/grasp_pose.py`，端到端入口也已经由 `infer_6d.py` 和 `infer_6d_single.py` 覆盖。
+
+### 修改
+
+- 删除根目录旧入口 `grasp_3d.py`。
+- 保留 `plug_vg/grasp_pose.py`、`plug_vg/geometry.py`、`plug_vg/io.py` 中的可复用实现。
+- 后续批量 RGB-D 推理使用 `infer_6d.py`。
+- 后续真实机器单帧验证使用 `infer_6d_single.py`。
+
 ## 2026-05-21 - 插头 6D 位姿几何参数更新
 
 ### 背景
@@ -60,7 +74,7 @@
 
 ### 说明
 
-- `infer_6d.py` 仍然只作为端到端编排脚本使用。它会调用 `grasp_3d.estimate_record()`，因此会自动使用更新后的物理模型。
+- `infer_6d.py` 仍然只作为端到端编排脚本使用。当前会调用 `plug_vg.grasp_pose.estimate_record()`，因此会自动使用更新后的物理模型。
 - 没有在 `infer_6d.py` 中新增额外运行功能或额外配置输出。
 - 现有旧推理 JSON 是基于旧的表面点平移定义生成的。若要按照新的中心点定义验证结果，需要先重新运行 `infer_6d.py`，再运行 `verify_6d_outputs.py`。
 
@@ -93,21 +107,20 @@
   - `plug_vg/grasp_pose.py`：从 stage1 record 和 D2RGB 深度图估计 6D 抓取位姿。
   - `plug_vg/verification.py`：复核已有 6D 输出并生成报告。
 
-- 顶层脚本保留原名称和原 CLI 参数：
+- 当时顶层脚本保留原名称和原 CLI 参数：
   - `infer.py`
   - `grasp_3d.py`
   - `infer_6d.py`
   - `verify_6d_outputs.py`
 
-- 顶层脚本现在主要作为轻量命令行入口使用，核心逻辑下沉到 `plug_vg/`。
-- `grasp_3d.py` 保留常用函数 re-export，尽量兼容已有的脚本间导入方式。
+- 顶层脚本主要作为轻量命令行入口使用，核心逻辑下沉到 `plug_vg/`。
+- 2026-05-23 起，旧版 `grasp_3d.py` 入口已删除；历史的两阶段 stage1 JSON 流程可直接复用 `plug_vg.grasp_pose.estimate_record()`。
 
 ### 主要影响
 
-- 旧命令仍然可用，例如：
+- 结构化当时旧命令仍然可用，例如：
   - `python infer.py --help`
   - `python infer_6d.py --help`
-  - `python grasp_3d.py --help`
   - `python verify_6d_outputs.py --help`
 
 - 输出 JSON 结构保持不变。

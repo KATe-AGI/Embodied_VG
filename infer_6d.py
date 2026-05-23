@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import time
 from pathlib import Path
 
 import cv2
@@ -126,6 +127,7 @@ def load_base_transform_inputs(args: argparse.Namespace) -> tuple[np.ndarray, np
 
 def main() -> None:
     args = parse_args()
+    total_start = time.perf_counter()
     dataset = args.dataset
     color_dir = dataset / "color"
     depth_dir = dataset / "D2RGB"
@@ -156,7 +158,9 @@ def main() -> None:
 
     stage1_summary = []
     summary = []
+    sample_timings = []
     for index, image_path in enumerate(images):
+        sample_start = time.perf_counter()
         image = cv2.imread(str(image_path))
         if image is None:
             print(f"Skipping unreadable RGB image: {image_path}")
@@ -185,8 +189,6 @@ def main() -> None:
                 args.robot_config,
             )
         stem = output_stem(record, index)
-        write_json(json_dir / f"{stem}_3d.json", result)
-        summary.append(result)
 
         if result.get("status") == "ok" and mask is not None and rotation is not None:
             center = np.asarray(result["grasp_pose_camera"]["translation_m"], dtype=np.float32)
@@ -195,13 +197,55 @@ def main() -> None:
             if args.save_ply and points is not None:
                 save_ply(points, ply_dir / f"{stem}_points.ply")
 
+        sample_elapsed = time.perf_counter() - sample_start
+        sample_timings.append(sample_elapsed)
+        result["timing"] = {
+            "sample_end_to_end_s": round(float(sample_elapsed), 6),
+            "sample_end_to_end_ms": round(float(sample_elapsed * 1000.0), 3),
+            "scope": "rgbd_input_to_base_6d_pose" if base_transform_inputs is not None else "rgbd_input_to_camera_6d_pose",
+            "includes_model_loading": False,
+            "includes_debug_artifact_writes": True,
+        }
+        write_json(json_dir / f"{stem}_3d.json", result)
+        summary.append(result)
+
     write_json(stage1_json_dir / "summary.json", stage1_summary)
     write_json(json_dir / "summary.json", summary)
 
     ok_count = sum(1 for item in summary if item.get("status") == "ok")
+    total_elapsed = time.perf_counter() - total_start
+    processed_count = len(summary)
+    timing_summary = {
+        "total_end_to_end_s": round(float(total_elapsed), 6),
+        "total_end_to_end_ms": round(float(total_elapsed * 1000.0), 3),
+        "processed_images": processed_count,
+        "ok_images": ok_count,
+        "failed_images": processed_count - ok_count,
+        "average_total_per_processed_image_s": None
+        if processed_count == 0
+        else round(float(total_elapsed / processed_count), 6),
+        "average_total_per_processed_image_ms": None
+        if processed_count == 0
+        else round(float(total_elapsed * 1000.0 / processed_count), 3),
+        "average_sample_pipeline_s": None
+        if not sample_timings
+        else round(float(sum(sample_timings) / len(sample_timings)), 6),
+        "average_sample_pipeline_ms": None
+        if not sample_timings
+        else round(float(sum(sample_timings) * 1000.0 / len(sample_timings)), 3),
+        "scope": "dataset_run_including_setup_model_loading_and_output_summary",
+        "sample_scope": "rgbd_input_to_base_6d_pose" if base_transform_inputs is not None else "rgbd_input_to_camera_6d_pose",
+    }
+    write_json(json_dir / "timing_summary.json", timing_summary)
     print(
         f"Processed {len(summary)} image source(s): {ok_count} ok, "
         f"{len(summary) - ok_count} failed. Results saved to {args.output}"
+    )
+    print(
+        "Timing: "
+        f"total = {timing_summary['total_end_to_end_s']} (s), "
+        f"average per image = {timing_summary['average_total_per_processed_image_s']} (s), "
+        f"average pipeline per image = {timing_summary['average_sample_pipeline_s']} (s)"
     )
 
 
