@@ -66,4 +66,4 @@ python infer_6d_single.py \
   --save-overlay
 ```
 
-The output JSON contains `grasp_pose_camera` and `grasp_pose_base`. `grasp_pose_base` is the vision-estimated grasp frame in the robot base frame; it is not a direct TCP motion target unless a grasp-frame-to-TCP transform is added later.
+The output JSON contains `grasp_pose_camera` and `grasp_pose_base`. In the grasp frame, `+X` points from plug tail to head and `+Z` is the approach direction from the camera-visible side into the plug. `grasp_pose_base` is the vision-estimated grasp frame in the robot base frame; it is not a direct TCP motion target unless a grasp-frame-to-TCP transform is added later.

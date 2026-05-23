@@ -191,8 +191,8 @@ def build_rotation(
     if z_axis is None:
         return None, {"plane_inliers": plane_inliers}
 
-    camera_side = -center
-    if float(np.dot(z_axis, camera_side)) < 0:
+    approach_side = center
+    if float(np.dot(z_axis, approach_side)) < 0:
         z_axis = -z_axis
 
     x_source = "keypoints_3d"
@@ -298,11 +298,11 @@ def robust_extent(points: np.ndarray, center: np.ndarray, rotation: np.ndarray) 
 def grasp_center_from_surface(surface_point: np.ndarray, rotation: np.ndarray) -> tuple[np.ndarray, dict[str, Any]]:
     offset_m = GRASP_REGION_THICKNESS_M * 0.5
     approach_axis = rotation[:, 2]
-    center_point = surface_point - approach_axis * offset_m
+    center_point = surface_point + approach_axis * offset_m
     return center_point.astype(np.float32), {
         "model": "cylindrical_midsection",
         "surface_anchor_camera_m": [round(float(v), 8) for v in surface_point.tolist()],
-        "offset_axis": "-z_approach",
+        "offset_axis": "+z_approach",
         "offset_m": round(float(offset_m), 8),
         "thickness_m": round(float(GRASP_REGION_THICKNESS_M), 8),
     }
