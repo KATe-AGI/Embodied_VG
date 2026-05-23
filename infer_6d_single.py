@@ -23,9 +23,9 @@ from infer import YOLO
 
 '''
 python infer_6d_single.py \
-  --rgb test_20260522/color_20260522_200225_861_0.png \
-  --d2rgb test_20260522/D2RGB_20260522_200225_861_0.png \
-  --robot-pose -0.812395 -0.033168 0.567694 -1.911869 0.253467 1.720176 \
+  --rgb test_20260523/color_20260523_112930_755_0.png \
+  --d2rgb test_20260523/D2RGB_20260523_112930_755_0.png \
+  --robot-pose  -0.611811 -0.064232 0.584076 -2.174418 0.08086 1.44885 \
   --output-dir /home/stoor/桌面/LY/proj/Embodied_VG/ultralytics/runs/plug_6d_single \
   --save-overlay \
   --save-ply
