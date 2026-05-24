@@ -26,7 +26,7 @@ python infer_6d_single.py \
   --rgb test_20260523/color_20260523_112930_755_0.png \
   --d2rgb test_20260523/D2RGB_20260523_112930_755_0.png \
   --robot-pose  -0.611811 -0.064232 0.584076 -2.174418 0.08086 1.44885 \
-  --output-dir /home/stoor/桌面/LY/proj/Embodied_VG/ultralytics/runs/plug_6d_single \
+  --output-dir /home/stoor/桌面/LY/proj/Embodied_VG/ultralytics/runs/plug_6d_single1 \
   --save-overlay \
   --save-ply
 '''
@@ -183,7 +183,17 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
         )
         if args.save_overlay and mask is not None and rotation is not None:
             center = np.asarray(result["grasp_pose_camera"]["translation_m"], dtype=np.float32)
-            draw_3d_overlay(record, mask, center, rotation, camera, overlay_dir / f"{args.rgb.stem}_grasp3d.jpg", args.axis_scale, args.axis_thickness)
+            # 相机坐标系下的抓取轴：X=尾→头, Y=夹爪闭合, Z=接近方向
+            draw_3d_overlay(record, mask, center, rotation, camera,
+                            overlay_dir / f"{args.rgb.stem}_grasp3d.jpg",
+                            args.axis_scale, args.axis_thickness)
+            # 基坐标系的世界轴 (robot base frame +X/+Y/+Z) 投影到相机图像
+            # R_camera_base = inv(R_base_end @ R_end_camera) 将基系向量变换到相机系
+            R_base_camera = (t_base_end @ t_end_camera)[:3, :3]
+            R_camera_base = R_base_camera.T.astype(np.float32)
+            draw_3d_overlay(record, mask, center, R_camera_base, camera,
+                            overlay_dir / f"{args.rgb.stem}_grasp3d_world.jpg",
+                            args.axis_scale, args.axis_thickness)
         if args.save_ply and points is not None:
             save_ply(points, ply_dir / f"{args.rgb.stem}_points.ply")
 
