@@ -18,15 +18,26 @@ from plug_vg.grasp_pose import estimate_record
 from plug_vg.io import raw_id_from_image, write_json
 from plug_vg.robot_transform import convert_camera_grasp_to_base, load_hand_eye_matrix, robot_pose_to_matrix
 from plug_vg.vision import draw_overlay as draw_stage1_overlay, run_models
+from tools.visualize_base_pose import build_view_data, default_output_path as default_base_view_path, render_html, write_html
 
 from infer import YOLO
 
-'''
+r'''
+windows:
+python infer_6d_single.py `
+  --rgb test_20260525\undistort_color_20260525_152152_943_0.png `
+  --d2rgb test_20260525\D2RGB_20260525_152152_943_0.png `
+  --robot-pose  -0.58694 -0.03700 0.59149 -2.097 0.000 1.555 `
+  --output-dir ultralytics/runs/plug_6d_single `
+  --save-overlay
+
+
+ubuntu:
 python infer_6d_single.py \
-  --rgb test_20260523/color_20260523_112930_755_0.png \
-  --d2rgb test_20260523/D2RGB_20260523_112930_755_0.png \
-  --robot-pose  -0.611811 -0.064232 0.584076 -2.174418 0.08086 1.44885 \
-  --output-dir /home/stoor/桌面/LY/proj/Embodied_VG/ultralytics/runs/plug_6d_single1 \
+  --rgb test_20260523\color_20260523_210954_135_0.png \
+  --d2rgb test_20260523\D2RGB_20260523_210954_135_0.png \
+  --robot-pose  -0.6119 -0.0641 0.5842 -2.174 0.080 1.449 \
+  --output-dir ultralytics/runs/plug_6d_single \
   --save-overlay \
   --save-ply
 '''
@@ -70,6 +81,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--axis-thickness", type=int, default=5, help="Overlay XYZ axis line thickness in pixels.")
     parser.add_argument("--save-overlay", action="store_true", help="Save YOLO and 3D grasp overlays.")
     parser.add_argument("--save-ply", action="store_true", help="Save filtered mask point cloud as an ASCII PLY file.")
+    parser.add_argument("--save-base-view", action="store_true", help="Save an interactive HTML 3D view of the base-frame grasp pose.")
     return parser.parse_args()
 
 
@@ -122,6 +134,19 @@ def print_result(result: dict[str, Any], output_path: Path) -> None:
     timing = result.get("timing") or {}
     if timing:
         print(f"Timing: single end-to-end = {timing.get('single_end_to_end_s')} (s)")
+
+
+def save_base_view(result: dict[str, Any], json_path: Path) -> Path:
+    view_args = argparse.Namespace(
+        json=json_path,
+        axis_length=0.1,
+        model_length=0.085,
+        model_width=0.055,
+        model_thickness=0.055,
+    )
+    output_path = default_base_view_path(json_path)
+    write_html(output_path, render_html(build_view_data(result, view_args)))
+    return output_path
 
 
 def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
@@ -224,7 +249,7 @@ def main() -> None:
             "single_end_to_end_ms": round(float(elapsed * 1000.0), 3),
             "scope": "rgbd_input_to_base_6d_pose",
             "includes_model_loading": True,
-            "includes_debug_artifact_writes": bool(args.save_overlay or args.save_ply),
+            "includes_debug_artifact_writes": bool(args.save_overlay or args.save_ply or args.save_base_view),
         }
         write_json(json_path, result)
         print_result(result, json_path)
@@ -236,9 +261,12 @@ def main() -> None:
         "single_end_to_end_ms": round(float(elapsed * 1000.0), 3),
         "scope": "rgbd_input_to_base_6d_pose",
         "includes_model_loading": True,
-        "includes_debug_artifact_writes": bool(args.save_overlay or args.save_ply),
+        "includes_debug_artifact_writes": bool(args.save_overlay or args.save_ply or args.save_base_view),
     }
     write_json(json_path, result)
+    if args.save_base_view and result.get("status") == "ok":
+        base_view_path = save_base_view(result, json_path)
+        print(f"base_view_html: {base_view_path}")
     print_result(result, json_path)
     if result.get("status") != "ok":
         raise SystemExit(1)
