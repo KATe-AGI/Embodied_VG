@@ -8,6 +8,8 @@ from plug_vg.config import HEAD_TAIL_DISTANCE_M
 from plug_vg.window_grasp import (
     WindowGraspError,
     add_window_candidates,
+    attach_direct_visual_grasp,
+    build_grasp_axis_base,
     build_window_geometry,
     generate_window_constrained_candidates,
     resolve_window_inputs,
@@ -96,11 +98,57 @@ class WindowGraspTests(unittest.TestCase):
         self.assertEqual(inputs.margin_m, 0.03)
         self.assertEqual(inputs.source, "cli")
 
+    def test_build_grasp_axis_base_uses_virtual_axis_through_grasp_point(self) -> None:
+        point = np.asarray([0.3, -0.2, 0.8], dtype=np.float64)
+        axis_fields = build_grasp_axis_base(point, [0.0, 2.0, 0.0], "unit_test_axis")
+
+        self.assertEqual(axis_fields["grasp_point_base_m"], [0.3, -0.2, 0.8])
+        axis = axis_fields["tail_to_head_axis_base"]
+        tail = np.asarray(axis["tail_point_m"], dtype=np.float64)
+        head = np.asarray(axis["head_point_m"], dtype=np.float64)
+        direction = np.asarray(axis["direction_unit"], dtype=np.float64)
+        np.testing.assert_allclose(direction, [0.0, 1.0, 0.0], atol=1e-8)
+        np.testing.assert_allclose((tail + head) * 0.5, point, atol=1e-8)
+        np.testing.assert_allclose(head - tail, direction * HEAD_TAIL_DISTANCE_M, atol=1e-8)
+        self.assertAlmostEqual(axis["length_m"], HEAD_TAIL_DISTANCE_M)
+        self.assertEqual(axis["source"], "unit_test_axis")
+
     def test_missing_window_corners(self) -> None:
         with self.assertRaises(WindowGraspError) as raised:
             resolve_window_inputs(config_path=None, corners_override=None, margin_override=None)
 
         self.assertEqual(raised.exception.reason, "window_corners_missing")
+
+    def test_attach_direct_visual_grasp_sets_final_pose_without_window_fields(self) -> None:
+        result = {
+            "status": "ok",
+            "warnings": [],
+            "grasp_pose_base": dict(self.reference_pose),
+            "best_grasp_pose_base": {"stale": True},
+            "window_geometry_base": {"stale": True},
+            "window_candidate_stats": {"stale": True},
+            "window_constrained_grasp_candidates": [{"stale": True}],
+        }
+
+        updated = attach_direct_visual_grasp(result)
+
+        self.assertEqual(updated["grasp_solution_mode"], "direct_visual")
+        self.assertEqual(updated["grasp_pose_base_role"], "final_grasp_pose")
+        self.assertNotIn("best_grasp_pose_base", updated)
+        self.assertNotIn("window_geometry_base", updated)
+        self.assertNotIn("window_candidate_stats", updated)
+        self.assertNotIn("window_constrained_grasp_candidates", updated)
+        self.assertEqual(updated["grasp_point_base_m"], self.reference_pose["translation_m"])
+        axis = updated["tail_to_head_axis_base"]
+        tail = np.asarray(axis["tail_point_m"], dtype=np.float64)
+        head = np.asarray(axis["head_point_m"], dtype=np.float64)
+        point = np.asarray(updated["grasp_point_base_m"], dtype=np.float64)
+        direction = np.asarray(axis["direction_unit"], dtype=np.float64)
+        reference_x = np.asarray(self.reference_pose["rotation_matrix"], dtype=np.float64)[:, 0]
+        np.testing.assert_allclose((tail + head) * 0.5, point, atol=1e-8)
+        np.testing.assert_allclose(head - tail, direction * HEAD_TAIL_DISTANCE_M, atol=1e-8)
+        np.testing.assert_allclose(direction, reference_x, atol=1e-8)
+        self.assertEqual(axis["source"], "direct_visual_grasp_x_axis")
 
     def test_add_window_candidates_sets_best_pose(self) -> None:
         override = [float(value) for value in self.corners.reshape(-1)]
@@ -113,6 +161,7 @@ class WindowGraspTests(unittest.TestCase):
         updated = add_window_candidates(result, config_path=None, corners_override=override, margin_override=0.1)
 
         self.assertEqual(updated["status"], "ok")
+        self.assertEqual(updated["grasp_solution_mode"], "window_constrained")
         self.assertEqual(updated["grasp_pose_base_role"], "surface_normal_reference")
         self.assertIn("best_grasp_pose_base", updated)
         self.assertEqual(updated["best_grasp_pose_base"], updated["window_constrained_grasp_candidates"][0])

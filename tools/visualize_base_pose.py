@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate an interactive base-frame 3D view for a saved window-constrained 6D grasp pose."""
+"""Generate an interactive base-frame 3D view for a saved 6D grasp pose."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ DEFAULT_MODEL_THICKNESS_M = 0.055
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--json", type=Path, required=True, help="Path to an OK *_6d_base.json result with best_grasp_pose_base.")
+    parser.add_argument("--json", type=Path, required=True, help="Path to an OK *_6d_base.json result.")
     parser.add_argument("--output", type=Path, default=None, help="Output HTML path. Defaults to *_base_pose_view.html.")
     parser.add_argument("--axis-length", type=float, default=DEFAULT_AXIS_LENGTH_M, help="Axis length in meters.")
     parser.add_argument("--model-length", type=float, default=DEFAULT_MODEL_LENGTH_M, help="Simplified target length along +X, meters.")
@@ -154,12 +154,16 @@ def build_view_data(result: dict[str, Any], args: argparse.Namespace) -> dict[st
 
     reference_pose = pose_view_from_dict(base_pose, "grasp_pose_base", "robot_pose_xyzrpy_m_rad", "robot_pose_xyzrpy_m_deg")
     best_pose = result.get("best_grasp_pose_base")
-    if not isinstance(best_pose, dict):
-        raise ValueError("OK result missing best_grasp_pose_base; rerun infer_6d_single.py with required window geometry.")
-    primary_pose = pose_view_from_dict(best_pose, "best_grasp_pose_base", "xyzrpy_m_rad", "xyzrpy_m_deg")
-    pose_role = "best_grasp_pose_base"
-    candidate_index = best_pose.get("index")
-    candidate_score = best_pose.get("score_visual_geometry")
+    if isinstance(best_pose, dict):
+        primary_pose = pose_view_from_dict(best_pose, "best_grasp_pose_base", "xyzrpy_m_rad", "xyzrpy_m_deg")
+        pose_role = "best_grasp_pose_base"
+        candidate_index = best_pose.get("index")
+        candidate_score = best_pose.get("score_visual_geometry")
+    else:
+        primary_pose = reference_pose
+        pose_role = "grasp_pose_base"
+        candidate_index = None
+        candidate_score = None
 
     return {
         "source_json": str(args.json),

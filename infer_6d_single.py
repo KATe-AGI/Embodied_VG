@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run single-frame window-constrained plug 6D grasp inference for real-machine validation."""
+"""Run single-frame plug 6D grasp inference for real-machine validation."""
 
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ from plug_vg.window_grasp import (
     DEFAULT_MARGIN_M,
     WindowGraspError,
     add_window_candidates,
+    attach_direct_visual_grasp,
     build_window_geometry,
     resolve_window_inputs,
 )
@@ -60,7 +61,7 @@ DEFAULT_ROBOT_CONFIG = ROOT / "configs" / "robot" / "cs_robot.yaml"
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=__doc__,
-        epilog="Window geometry is required: provide --window-config or --window-corners-base.",
+        epilog="Window geometry is optional. Provide --window-config or --window-corners-base to enable window-constrained grasp candidates.",
     )
     parser.add_argument("--rgb", type=Path, required=True, help="RGB image path.")
     parser.add_argument("--d2rgb", type=Path, required=True, help="Registered D2RGB depth PNG path.")
@@ -94,15 +95,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--axis-thickness", type=int, default=5, help="Overlay XYZ axis line thickness in pixels.")
     parser.add_argument("--save-overlay", action="store_true", help="Save YOLO and 3D grasp overlays.")
     parser.add_argument("--save-ply", action="store_true", help="Save filtered mask point cloud as an ASCII PLY file.")
-    parser.add_argument("--save-base-view", action="store_true", help="Save an interactive HTML 3D view of the best window-constrained grasp pose.")
-    parser.add_argument("--window-config", type=Path, default=None, help="Required unless --window-corners-base is used. YAML file containing base-frame window corners W1-W4.")
+    parser.add_argument("--save-base-view", action="store_true", help="Save an interactive HTML 3D view of the final base-frame grasp pose.")
+    parser.add_argument("--window-config", type=Path, default=None, help="Optional YAML file containing base-frame window corners W1-W4. Enables window-constrained grasp candidates.")
     parser.add_argument(
         "--window-corners-base",
         type=float,
         nargs=12,
         default=None,
         metavar=("W1X", "W1Y", "W1Z", "W2X", "W2Y", "W2Z", "W3X", "W3Y", "W3Z", "W4X", "W4Y", "W4Z"),
-        help="Window corners W1 W2 W3 W4 in robot base frame, meters. Overrides --window-config corners.",
+        help="Optional window corners W1 W2 W3 W4 in robot base frame, meters. Overrides --window-config corners and enables window-constrained grasp candidates.",
     )
     parser.add_argument(
         "--window-margin-m",
@@ -117,17 +118,29 @@ def output_json_path(output_dir: Path, rgb_path: Path) -> Path:
     return output_dir / f"{rgb_path.stem}_6d_base.json"
 
 
+def window_constraint_requested(args: argparse.Namespace) -> bool:
+    return args.window_config is not None or args.window_corners_base is not None
+
+
+def margin_ignored_without_window(args: argparse.Namespace) -> bool:
+    return args.window_margin_m is not None and not window_constraint_requested(args)
+
+
 def make_failure(args: argparse.Namespace, reason: str, warnings: list[str] | None = None) -> dict[str, Any]:
+    all_warnings = list(warnings or [])
+    if margin_ignored_without_window(args):
+        all_warnings.append("window_margin_ignored_without_window_geometry")
     return {
         "status": "failed",
         "reason": reason,
-        "warnings": warnings or [],
+        "warnings": all_warnings,
         "input": {
             "image": str(args.rgb),
             "d2rgb": str(args.d2rgb),
             "robot_pose_xyzrpy_m_rad": [float(v) for v in args.robot_pose],
             "window_config": None if args.window_config is None else str(args.window_config),
             "window_corners_base_provided": args.window_corners_base is not None,
+            "window_constraint_enabled": window_constraint_requested(args),
             "window_margin_m": None if args.window_margin_m is None else float(args.window_margin_m),
         },
     }
@@ -148,17 +161,23 @@ def single_stage1_record(image_path: Path, image_bgr: np.ndarray, seg_items: lis
 def print_result(result: dict[str, Any], output_path: Path) -> None:
     print(f"status: {result.get('status')}")
     if result.get("status") == "ok":
-        candidates = result.get("window_constrained_grasp_candidates") or []
-        print(f"window_constrained_grasp_candidates.count: {len(candidates)}")
-        best_pose = result.get("best_grasp_pose_base") or {}
-        print(f"best_grasp_pose_base.xyzrpy_m_rad: {best_pose.get('xyzrpy_m_rad')}")
-        print(f"best_grasp_pose_base.xyzrpy_m_deg: {best_pose.get('xyzrpy_m_deg')}")
-        print(f"best_grasp_pose_base.score_visual_geometry: {best_pose.get('score_visual_geometry')}")
+        print(f"grasp_solution_mode: {result.get('grasp_solution_mode')}")
+        best_pose = result.get("best_grasp_pose_base")
+        if isinstance(best_pose, dict):
+            candidates = result.get("window_constrained_grasp_candidates") or []
+            print(f"window_constrained_grasp_candidates.count: {len(candidates)}")
+            print(f"best_grasp_pose_base.xyzrpy_m_rad: {best_pose.get('xyzrpy_m_rad')}")
+            print(f"best_grasp_pose_base.xyzrpy_m_deg: {best_pose.get('xyzrpy_m_deg')}")
+            print(f"best_grasp_pose_base.score_visual_geometry: {best_pose.get('score_visual_geometry')}")
+        else:
+            grasp_pose_base = result.get("grasp_pose_base") or {}
+            print(f"grasp_pose_base.robot_pose_xyzrpy_m_rad: {grasp_pose_base.get('robot_pose_xyzrpy_m_rad')}")
+            print(f"grasp_pose_base.robot_pose_xyzrpy_m_deg: {grasp_pose_base.get('robot_pose_xyzrpy_m_deg')}")
         axis = result.get("tail_to_head_axis_base") or {}
         print(f"grasp_point_base_m: {result.get('grasp_point_base_m')}")
         print(f"tail_to_head_axis_base.tail_point_m: {axis.get('tail_point_m')}")
         print(f"tail_to_head_axis_base.head_point_m: {axis.get('head_point_m')}")
-        print(f"reference_grasp_pose_base.role: {result.get('grasp_pose_base_role', 'surface_normal_reference')}")
+        print(f"grasp_pose_base.role: {result.get('grasp_pose_base_role')}")
         warnings = result.get("warnings") or []
         if warnings:
             print(f"warnings: {warnings}")
@@ -190,16 +209,18 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_json_path(args.output_dir, args.rgb)
     args.dataset = args.d2rgb.parent.parent
+    window_requested = window_constraint_requested(args)
 
-    try:
-        window_inputs = resolve_window_inputs(args.window_config, args.window_corners_base, args.window_margin_m)
-        build_window_geometry(window_inputs.corners, window_inputs.margin_m)
-    except WindowGraspError as exc:
-        result = make_failure(args, exc.reason, [str(exc)])
-        if exc.details:
-            result["window_error"] = exc.details
-        write_json(json_path, result)
-        return result, json_path
+    if window_requested:
+        try:
+            window_inputs = resolve_window_inputs(args.window_config, args.window_corners_base, args.window_margin_m)
+            build_window_geometry(window_inputs.corners, window_inputs.margin_m)
+        except WindowGraspError as exc:
+            result = make_failure(args, exc.reason, [str(exc)])
+            if exc.details:
+                result["window_error"] = exc.details
+            write_json(json_path, result)
+            return result, json_path
 
     if not args.rgb.is_file():
         result = make_failure(args, "rgb_missing")
@@ -253,16 +274,27 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
             args.hand_eye_config,
             args.robot_config,
         )
-        result["grasp_pose_base_role"] = "surface_normal_reference"
-        try:
-            result = add_window_candidates(result, args.window_config, args.window_corners_base, args.window_margin_m)
-        except WindowGraspError as exc:
-            result["status"] = "failed"
-            result["reason"] = exc.reason
-            result.pop("best_grasp_pose_base", None)
-            result.setdefault("warnings", []).append(str(exc))
-            if exc.details:
-                result["window_error"] = exc.details
+        if window_requested:
+            try:
+                result = add_window_candidates(result, args.window_config, args.window_corners_base, args.window_margin_m)
+            except WindowGraspError as exc:
+                result["status"] = "failed"
+                result["reason"] = exc.reason
+                result.pop("best_grasp_pose_base", None)
+                result.pop("grasp_point_base_m", None)
+                result.pop("tail_to_head_axis_base", None)
+                result.setdefault("warnings", []).append(str(exc))
+                if exc.details:
+                    result["window_error"] = exc.details
+        else:
+            try:
+                result = attach_direct_visual_grasp(result)
+            except WindowGraspError as exc:
+                result["status"] = "failed"
+                result["reason"] = exc.reason
+                result.setdefault("warnings", []).append(str(exc))
+            if margin_ignored_without_window(args):
+                result.setdefault("warnings", []).append("window_margin_ignored_without_window_geometry")
         if args.save_overlay and mask is not None and rotation is not None:
             center = np.asarray(result["grasp_pose_camera"]["translation_m"], dtype=np.float32)
             # 相机坐标系下的抓取轴：X=尾→头, Y=夹爪闭合, Z=接近方向
@@ -287,9 +319,14 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
             "robot_pose_xyzrpy_m_rad": [float(v) for v in args.robot_pose],
             "window_config": None if args.window_config is None else str(args.window_config),
             "window_corners_base_provided": args.window_corners_base is not None,
+            "window_constraint_enabled": window_requested,
             "window_margin_m": None if args.window_margin_m is None else float(args.window_margin_m),
         }
     )
+    if margin_ignored_without_window(args):
+        warnings = result.setdefault("warnings", [])
+        if "window_margin_ignored_without_window_geometry" not in warnings:
+            warnings.append("window_margin_ignored_without_window_geometry")
     write_json(json_path, result)
     return result, json_path
 

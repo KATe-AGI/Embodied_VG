@@ -1,6 +1,6 @@
 # EmbodiedVG
 
-EmbodiedVG is the vision-side pipeline for plug grasping. The current real-machine validation entry takes one RGB image, one registered D2RGB depth PNG, the current robot end-effector pose, and a robot-base-frame window geometry, then outputs the best window-constrained plug grasp frame in the robot base frame.
+EmbodiedVG is the vision-side pipeline for plug grasping. The current real-machine validation entry takes one RGB image, one registered D2RGB depth PNG, and the current robot end-effector pose, then outputs a plug 6D grasp frame in the robot base frame. Window geometry can be provided when the grasp must be constrained through a known window.
 
 ## Create Conda Environment
 
@@ -57,6 +57,19 @@ PY
 
 ## Single-Frame 6D Inference
 
+Default direct-visual mode:
+
+```bash
+python infer_6d_single.py \
+  --rgb plug_dataset_all_20260520/rgbd_test/color/color_20260519_215321_955_7.png \
+  --d2rgb plug_dataset_all_20260520/rgbd_test/D2RGB/D2RGB_20260519_215321_955_7.png \
+  --robot-pose 0.42 -0.18 0.63 0.3 -0.2 0.5 \
+  --output-dir ultralytics/runs/plug_6d_single \
+  --save-overlay
+```
+
+Window-constrained mode:
+
 ```bash
 python infer_6d_single.py \
   --rgb plug_dataset_all_20260520/rgbd_test/color/color_20260519_215321_955_7.png \
@@ -67,15 +80,16 @@ python infer_6d_single.py \
   --save-overlay
 ```
 
-Window geometry is required. Provide either `--window-config` or `--window-corners-base`.
+Window geometry is optional. Provide either `--window-config` or `--window-corners-base` to enable window-constrained candidate generation. If neither is provided, the final grasp pose is the direct visual base-frame pose.
 
 The output JSON contains:
 
+- `grasp_solution_mode`: `direct_visual` without window geometry, or `window_constrained` when window geometry is enabled.
 - `grasp_pose_camera`: visual 6D estimate in the RGB camera frame.
-- `grasp_pose_base`: the same visual estimate transformed to robot base frame; this is a `surface_normal_reference` diagnostic pose.
-- `window_constrained_grasp_candidates`: sorted base-frame grasp poses constrained by the window geometry.
-- `best_grasp_pose_base`: the first candidate and the downstream grasp pose to consume.
+- `grasp_pose_base`: the visual estimate transformed to robot base frame. In direct-visual mode this is the final grasp pose; in window-constrained mode it is a `surface_normal_reference`.
+- `window_constrained_grasp_candidates`: sorted base-frame grasp poses constrained by the window geometry; present only in window-constrained mode.
+- `best_grasp_pose_base`: the first window candidate and the downstream grasp pose to consume; present only in window-constrained mode.
 - `grasp_point_base_m`: final grasp point `(x, y, z)` in the robot base frame.
 - `tail_to_head_axis_base`: virtual tail/head endpoints on the plug `tail -> head` axis. The axis uses the visual reference pose `+X`, is centered on `grasp_point_base_m`, and uses the configured plug head-tail distance.
 
-In the grasp frame, `+X` points from plug tail to head and `+Z` is the approach direction selected for the window-constrained grasp.
+In direct-visual mode, the grasp frame is the original visual grasp coordinate system. In window-constrained mode, `best_grasp_pose_base` uses the selected window approach frame while `tail_to_head_axis_base` still describes the plug body's visual `tail -> head` direction.

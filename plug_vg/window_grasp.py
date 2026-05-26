@@ -233,32 +233,77 @@ def _sample_window_points(geometry: dict[str, Any]) -> list[tuple[int, int, np.n
     return points
 
 
+def build_grasp_axis_base(
+    grasp_point: np.ndarray | list[float] | tuple[float, ...],
+    tail_to_head_axis: np.ndarray | list[float] | tuple[float, ...],
+    source: str = "surface_normal_reference_x_axis",
+) -> dict[str, Any]:
+    """Build a base-frame grasp point and virtual tail-to-head axis through it."""
+
+    point = np.asarray(grasp_point, dtype=np.float64)
+    if point.shape != (3,) or not np.all(np.isfinite(point)):
+        raise WindowGraspError("grasp_axis_invalid", "grasp point must be a finite 3D vector.")
+    direction = np.asarray(tail_to_head_axis, dtype=np.float64)
+    if direction.shape != (3,) or not np.all(np.isfinite(direction)):
+        raise WindowGraspError("grasp_axis_invalid", "tail-to-head axis must be a finite 3D vector.")
+    direction_unit = normalize(direction)
+    if direction_unit is None:
+        raise WindowGraspError("grasp_axis_invalid", "tail-to-head axis has near-zero length.")
+
+    half_axis_length = float(HEAD_TAIL_DISTANCE_M) * 0.5
+    tail_point = point - direction_unit * half_axis_length
+    head_point = point + direction_unit * half_axis_length
+    return {
+        "grasp_point_base_m": round_list(point),
+        "tail_to_head_axis_base": {
+            "tail_point_m": round_list(tail_point),
+            "head_point_m": round_list(head_point),
+            "direction_unit": round_list(direction_unit),
+            "length_m": round(float(HEAD_TAIL_DISTANCE_M), 8),
+            "passes_through": "grasp_point_base_m",
+            "source": source,
+        },
+    }
+
+
+def attach_direct_visual_grasp(result: dict[str, Any]) -> dict[str, Any]:
+    """Mark grasp_pose_base as the final direct visual grasp and attach axis fields."""
+
+    grasp_pose_base = result.get("grasp_pose_base")
+    if not isinstance(grasp_pose_base, dict):
+        raise WindowGraspError("base_grasp_missing", "OK result missing grasp_pose_base.")
+    translation = np.asarray(grasp_pose_base.get("translation_m"), dtype=np.float64)
+    rotation_reference = np.asarray(grasp_pose_base.get("rotation_matrix"), dtype=np.float64)
+    if translation.shape != (3,) or rotation_reference.shape != (3, 3):
+        raise WindowGraspError("base_grasp_invalid", "grasp_pose_base must contain translation_m and rotation_matrix.")
+
+    result["grasp_solution_mode"] = "direct_visual"
+    result["grasp_pose_base_role"] = "final_grasp_pose"
+    result.update(build_grasp_axis_base(translation, rotation_reference[:, 0], "direct_visual_grasp_x_axis"))
+    for key in (
+        "best_grasp_pose_base",
+        "window_geometry_base",
+        "window_candidate_stats",
+        "window_constrained_grasp_candidates",
+    ):
+        result.pop(key, None)
+    return result
+
+
 def _candidate_pose(rotation: np.ndarray, translation: np.ndarray, tail_to_head_axis: np.ndarray) -> dict[str, Any]:
     transform = np.eye(4, dtype=np.float64)
     transform[:3, :3] = rotation
     transform[:3, 3] = translation
     rpy = rotation_to_rpy_xyz(rotation)
     rpy_deg = np.degrees(np.asarray(rpy, dtype=np.float64))
-    x_axis = np.asarray(tail_to_head_axis, dtype=np.float64)
-    half_axis_length = float(HEAD_TAIL_DISTANCE_M) * 0.5
-    tail_point = translation - x_axis * half_axis_length
-    head_point = translation + x_axis * half_axis_length
     return {
         "translation_m": round_list(translation),
-        "grasp_point_base_m": round_list(translation),
+        **build_grasp_axis_base(translation, tail_to_head_axis, "surface_normal_reference_x_axis"),
         "rotation_matrix": round_list(rotation),
         "quaternion_xyzw": rotation_to_quaternion_xyzw(rotation),
         "xyzrpy_m_rad": round_list([*translation.tolist(), *rpy]),
         "xyzrpy_m_deg": round_list([*translation.tolist(), *rpy_deg.tolist()]),
         "T_base_grasp": round_list(transform),
-        "tail_to_head_axis_base": {
-            "tail_point_m": round_list(tail_point),
-            "head_point_m": round_list(head_point),
-            "direction_unit": round_list(x_axis),
-            "length_m": round(float(HEAD_TAIL_DISTANCE_M), 8),
-            "passes_through": "grasp_point_base_m",
-            "source": "surface_normal_reference_x_axis",
-        },
     }
 
 
@@ -364,6 +409,7 @@ def add_window_candidates(
     inputs = resolve_window_inputs(config_path, corners_override, margin_override)
     geometry = build_window_geometry(inputs.corners, inputs.margin_m)
     candidates, stats = generate_window_constrained_candidates(result["grasp_pose_base"], geometry)
+    result["grasp_solution_mode"] = "window_constrained"
     result["grasp_pose_base_role"] = "surface_normal_reference"
     result["window_geometry_base"] = public_window_geometry(geometry)
     result["window_geometry_base"]["source"] = inputs.source
@@ -388,6 +434,8 @@ __all__ = [
     "DEFAULT_MARGIN_M",
     "WindowGraspError",
     "add_window_candidates",
+    "attach_direct_visual_grasp",
+    "build_grasp_axis_base",
     "build_window_geometry",
     "generate_window_constrained_candidates",
     "public_window_geometry",
