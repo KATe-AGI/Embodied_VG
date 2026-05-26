@@ -1,0 +1,13 @@
+# Fixed rectangular box-entry window in robot base frame.
+#
+# Corner order: left-top, right-top, right-bottom, left-bottom.
+# Source measurements were provided in millimeters and converted to meters.
+
+frame: base
+corner_order: left_top_right_top_right_bottom_left_bottom
+corners_base_m:
+  W1: [-0.905, -0.2311, 0.4622]
+  W2: [-0.905, 0.2311, 0.4622]
+  W3: [-0.905, 0.2311, 0.208]
+  W4: [-0.905, -0.2311, 0.208]
+margin_m: 0.02

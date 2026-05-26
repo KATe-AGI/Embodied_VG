@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run single-frame plug 6D grasp inference for real-machine validation."""
+"""Run single-frame window-constrained plug 6D grasp inference for real-machine validation."""
 
 from __future__ import annotations
 
@@ -18,6 +18,13 @@ from plug_vg.grasp_pose import estimate_record
 from plug_vg.io import raw_id_from_image, write_json
 from plug_vg.robot_transform import convert_camera_grasp_to_base, load_hand_eye_matrix, robot_pose_to_matrix
 from plug_vg.vision import draw_overlay as draw_stage1_overlay, run_models
+from plug_vg.window_grasp import (
+    DEFAULT_MARGIN_M,
+    WindowGraspError,
+    add_window_candidates,
+    build_window_geometry,
+    resolve_window_inputs,
+)
 from tools.visualize_base_pose import build_view_data, default_output_path as default_base_view_path, render_html, write_html
 
 from infer import YOLO
@@ -29,16 +36,19 @@ python infer_6d_single.py `
   --d2rgb test_20260525\D2RGB_20260525_152152_943_0.png `
   --robot-pose  -0.58694 -0.03700 0.59149 -2.097 0.000 1.555 `
   --output-dir ultralytics/runs/plug_6d_single `
+  --window-config configs/window/box_window.yaml `
   --save-overlay
 
 
 ubuntu:
 python infer_6d_single.py \
-  --rgb test_20260523\color_20260523_210954_135_0.png \
-  --d2rgb test_20260523\D2RGB_20260523_210954_135_0.png \
+  --rgb test_20260523/color_20260523_142307_548_0.png \
+  --d2rgb test_20260523/D2RGB_20260523_142307_548_0.png \
   --robot-pose  -0.6119 -0.0641 0.5842 -2.174 0.080 1.449 \
   --output-dir ultralytics/runs/plug_6d_single \
+  --window-config configs/window/box_window.yaml \
   --save-overlay \
+  --save-base-view \
   --save-ply
 '''
 
@@ -48,7 +58,10 @@ DEFAULT_ROBOT_CONFIG = ROOT / "configs" / "robot" / "cs_robot.yaml"
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog="Window geometry is required: provide --window-config or --window-corners-base.",
+    )
     parser.add_argument("--rgb", type=Path, required=True, help="RGB image path.")
     parser.add_argument("--d2rgb", type=Path, required=True, help="Registered D2RGB depth PNG path.")
     parser.add_argument(
@@ -81,7 +94,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--axis-thickness", type=int, default=5, help="Overlay XYZ axis line thickness in pixels.")
     parser.add_argument("--save-overlay", action="store_true", help="Save YOLO and 3D grasp overlays.")
     parser.add_argument("--save-ply", action="store_true", help="Save filtered mask point cloud as an ASCII PLY file.")
-    parser.add_argument("--save-base-view", action="store_true", help="Save an interactive HTML 3D view of the base-frame grasp pose.")
+    parser.add_argument("--save-base-view", action="store_true", help="Save an interactive HTML 3D view of the best window-constrained grasp pose.")
+    parser.add_argument("--window-config", type=Path, default=None, help="Required unless --window-corners-base is used. YAML file containing base-frame window corners W1-W4.")
+    parser.add_argument(
+        "--window-corners-base",
+        type=float,
+        nargs=12,
+        default=None,
+        metavar=("W1X", "W1Y", "W1Z", "W2X", "W2Y", "W2Z", "W3X", "W3Y", "W3Z", "W4X", "W4Y", "W4Z"),
+        help="Window corners W1 W2 W3 W4 in robot base frame, meters. Overrides --window-config corners.",
+    )
+    parser.add_argument(
+        "--window-margin-m",
+        type=float,
+        default=None,
+        help=f"Window inward sampling margin in meters. Defaults to YAML margin_m or {DEFAULT_MARGIN_M}.",
+    )
     return parser.parse_args()
 
 
@@ -98,6 +126,9 @@ def make_failure(args: argparse.Namespace, reason: str, warnings: list[str] | No
             "image": str(args.rgb),
             "d2rgb": str(args.d2rgb),
             "robot_pose_xyzrpy_m_rad": [float(v) for v in args.robot_pose],
+            "window_config": None if args.window_config is None else str(args.window_config),
+            "window_corners_base_provided": args.window_corners_base is not None,
+            "window_margin_m": None if args.window_margin_m is None else float(args.window_margin_m),
         },
     }
 
@@ -117,11 +148,17 @@ def single_stage1_record(image_path: Path, image_bgr: np.ndarray, seg_items: lis
 def print_result(result: dict[str, Any], output_path: Path) -> None:
     print(f"status: {result.get('status')}")
     if result.get("status") == "ok":
-        pose_base = result.get("grasp_pose_base") or {}
-        pose_rad = pose_base.get("robot_pose_xyzrpy_m_rad")
-        pose_deg = pose_base.get("robot_pose_xyzrpy_m_deg")
-        print(f"grasp_pose_base.robot_pose_xyzrpy_m_rad: {pose_rad}")
-        print(f"grasp_pose_base.robot_pose_xyzrpy_m_deg: {pose_deg}")
+        candidates = result.get("window_constrained_grasp_candidates") or []
+        print(f"window_constrained_grasp_candidates.count: {len(candidates)}")
+        best_pose = result.get("best_grasp_pose_base") or {}
+        print(f"best_grasp_pose_base.xyzrpy_m_rad: {best_pose.get('xyzrpy_m_rad')}")
+        print(f"best_grasp_pose_base.xyzrpy_m_deg: {best_pose.get('xyzrpy_m_deg')}")
+        print(f"best_grasp_pose_base.score_visual_geometry: {best_pose.get('score_visual_geometry')}")
+        axis = result.get("tail_to_head_axis_base") or {}
+        print(f"grasp_point_base_m: {result.get('grasp_point_base_m')}")
+        print(f"tail_to_head_axis_base.tail_point_m: {axis.get('tail_point_m')}")
+        print(f"tail_to_head_axis_base.head_point_m: {axis.get('head_point_m')}")
+        print(f"reference_grasp_pose_base.role: {result.get('grasp_pose_base_role', 'surface_normal_reference')}")
         warnings = result.get("warnings") or []
         if warnings:
             print(f"warnings: {warnings}")
@@ -153,6 +190,16 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_json_path(args.output_dir, args.rgb)
     args.dataset = args.d2rgb.parent.parent
+
+    try:
+        window_inputs = resolve_window_inputs(args.window_config, args.window_corners_base, args.window_margin_m)
+        build_window_geometry(window_inputs.corners, window_inputs.margin_m)
+    except WindowGraspError as exc:
+        result = make_failure(args, exc.reason, [str(exc)])
+        if exc.details:
+            result["window_error"] = exc.details
+        write_json(json_path, result)
+        return result, json_path
 
     if not args.rgb.is_file():
         result = make_failure(args, "rgb_missing")
@@ -206,6 +253,16 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
             args.hand_eye_config,
             args.robot_config,
         )
+        result["grasp_pose_base_role"] = "surface_normal_reference"
+        try:
+            result = add_window_candidates(result, args.window_config, args.window_corners_base, args.window_margin_m)
+        except WindowGraspError as exc:
+            result["status"] = "failed"
+            result["reason"] = exc.reason
+            result.pop("best_grasp_pose_base", None)
+            result.setdefault("warnings", []).append(str(exc))
+            if exc.details:
+                result["window_error"] = exc.details
         if args.save_overlay and mask is not None and rotation is not None:
             center = np.asarray(result["grasp_pose_camera"]["translation_m"], dtype=np.float32)
             # 相机坐标系下的抓取轴：X=尾→头, Y=夹爪闭合, Z=接近方向
@@ -228,6 +285,9 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
             "image": str(args.rgb),
             "d2rgb": str(args.d2rgb),
             "robot_pose_xyzrpy_m_rad": [float(v) for v in args.robot_pose],
+            "window_config": None if args.window_config is None else str(args.window_config),
+            "window_corners_base_provided": args.window_corners_base is not None,
+            "window_margin_m": None if args.window_margin_m is None else float(args.window_margin_m),
         }
     )
     write_json(json_path, result)

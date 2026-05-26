@@ -5,8 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 
 ROOT = Path(__file__).resolve().parents[1]
 ULTRALYTICS_DIR = ROOT / "ultralytics"
@@ -27,6 +25,8 @@ HEAD_TAIL_DISTANCE_M = 0.165
 
 
 def load_camera(path: Path) -> dict[str, Any]:
+    import yaml
+
     with path.open("r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
     required = ("fx", "fy", "cx", "cy", "depth_scale", "image_width", "image_height")
@@ -34,4 +34,3 @@ def load_camera(path: Path) -> dict[str, Any]:
     if missing:
         raise KeyError(f"Camera config missing required key(s): {', '.join(missing)}")
     return data
-

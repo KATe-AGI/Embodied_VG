@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate an interactive base-frame 3D view for a saved 6D grasp pose."""
+"""Generate an interactive base-frame 3D view for a saved window-constrained 6D grasp pose."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ DEFAULT_MODEL_THICKNESS_M = 0.055
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--json", type=Path, required=True, help="Path to an OK *_6d_base.json or *_3d.json result.")
+    parser.add_argument("--json", type=Path, required=True, help="Path to an OK *_6d_base.json result with best_grasp_pose_base.")
     parser.add_argument("--output", type=Path, default=None, help="Output HTML path. Defaults to *_base_pose_view.html.")
     parser.add_argument("--axis-length", type=float, default=DEFAULT_AXIS_LENGTH_M, help="Axis length in meters.")
     parser.add_argument("--model-length", type=float, default=DEFAULT_MODEL_LENGTH_M, help="Simplified target length along +X, meters.")
@@ -60,6 +60,88 @@ def as_rotation_matrix(value: Any, name: str) -> list[list[float]]:
     return [as_float_vector(row, 3, f"{name}[{index}]") for index, row in enumerate(value)]
 
 
+def optional_float_vector(value: Any, length: int, name: str) -> list[float] | None:
+    if value is None:
+        return None
+    return as_float_vector(value, length, name)
+
+
+def build_window_view_data(result: dict[str, Any]) -> dict[str, Any] | None:
+    window = result.get("window_geometry_base")
+    if not isinstance(window, dict):
+        return None
+
+    corners = window.get("corners_base_m") or {}
+    full_corners = []
+    if isinstance(corners, dict):
+        for index in range(1, 5):
+            full_corners.append(as_float_vector(corners.get(f"W{index}"), 3, f"window_geometry_base.corners_base_m.W{index}"))
+    else:
+        return None
+
+    center = optional_float_vector(window.get("center_base_m"), 3, "window_geometry_base.center_base_m")
+    x_axis = optional_float_vector(window.get("x_window_base"), 3, "window_geometry_base.x_window_base")
+    y_axis = optional_float_vector(window.get("y_window_base"), 3, "window_geometry_base.y_window_base")
+    effective_width = window.get("effective_width_m")
+    effective_height = window.get("effective_height_m")
+    effective_corners = None
+    if center is not None and x_axis is not None and y_axis is not None and effective_width is not None and effective_height is not None:
+        ex = float(effective_width) * 0.5
+        ey = float(effective_height) * 0.5
+        effective_corners = [
+            [center[i] - x_axis[i] * ex - y_axis[i] * ey for i in range(3)],
+            [center[i] + x_axis[i] * ex - y_axis[i] * ey for i in range(3)],
+            [center[i] + x_axis[i] * ex + y_axis[i] * ey for i in range(3)],
+            [center[i] - x_axis[i] * ex + y_axis[i] * ey for i in range(3)],
+        ]
+
+    candidates = []
+    raw_candidates = result.get("window_constrained_grasp_candidates") or []
+    if isinstance(raw_candidates, list):
+        for item in raw_candidates:
+            if not isinstance(item, dict):
+                continue
+            point = optional_float_vector(item.get("window_point_base"), 3, "candidate.window_point_base")
+            z_axis = optional_float_vector(item.get("z_approach_base"), 3, "candidate.z_approach_base")
+            if point is None or z_axis is None:
+                continue
+            candidates.append(
+                {
+                    "index": item.get("index"),
+                    "window_point": point,
+                    "z_approach": z_axis,
+                    "score": item.get("score_visual_geometry"),
+                }
+            )
+
+    return {
+        "source": window.get("source"),
+        "full_corners": full_corners,
+        "effective_corners": effective_corners,
+        "center": center,
+        "normal": optional_float_vector(window.get("normal_base"), 3, "window_geometry_base.normal_base"),
+        "width": window.get("width_m"),
+        "height": window.get("height_m"),
+        "margin": window.get("margin_m"),
+        "effective_width": effective_width,
+        "effective_height": effective_height,
+        "candidates": candidates,
+        "candidate_stats": result.get("window_candidate_stats") or {},
+    }
+
+
+def pose_view_from_dict(pose: dict[str, Any], prefix: str, pose_rad_key: str, pose_deg_key: str) -> dict[str, Any]:
+    pose_rad = pose.get(pose_rad_key)
+    pose_deg = pose.get(pose_deg_key)
+    return {
+        "center": as_float_vector(pose.get("translation_m"), 3, f"{prefix}.translation_m"),
+        "rotation": as_rotation_matrix(pose.get("rotation_matrix"), f"{prefix}.rotation_matrix"),
+        "quaternion_xyzw": pose.get("quaternion_xyzw"),
+        "pose_rad": None if pose_rad is None else as_float_vector(pose_rad, 6, f"{prefix}.{pose_rad_key}"),
+        "pose_deg": None if pose_deg is None else as_float_vector(pose_deg, 6, f"{prefix}.{pose_deg_key}"),
+    }
+
+
 def build_view_data(result: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
     status = result.get("status")
     if status != "ok":
@@ -70,25 +152,33 @@ def build_view_data(result: dict[str, Any], args: argparse.Namespace) -> dict[st
     if not isinstance(base_pose, dict):
         raise ValueError("OK result missing grasp_pose_base")
 
-    translation = as_float_vector(base_pose.get("translation_m"), 3, "grasp_pose_base.translation_m")
-    rotation = as_rotation_matrix(base_pose.get("rotation_matrix"), "grasp_pose_base.rotation_matrix")
-    pose_rad = base_pose.get("robot_pose_xyzrpy_m_rad")
-    pose_deg = base_pose.get("robot_pose_xyzrpy_m_deg")
-    if pose_rad is not None:
-        pose_rad = as_float_vector(pose_rad, 6, "grasp_pose_base.robot_pose_xyzrpy_m_rad")
-    if pose_deg is not None:
-        pose_deg = as_float_vector(pose_deg, 6, "grasp_pose_base.robot_pose_xyzrpy_m_deg")
+    reference_pose = pose_view_from_dict(base_pose, "grasp_pose_base", "robot_pose_xyzrpy_m_rad", "robot_pose_xyzrpy_m_deg")
+    best_pose = result.get("best_grasp_pose_base")
+    if not isinstance(best_pose, dict):
+        raise ValueError("OK result missing best_grasp_pose_base; rerun infer_6d_single.py with required window geometry.")
+    primary_pose = pose_view_from_dict(best_pose, "best_grasp_pose_base", "xyzrpy_m_rad", "xyzrpy_m_deg")
+    pose_role = "best_grasp_pose_base"
+    candidate_index = best_pose.get("index")
+    candidate_score = best_pose.get("score_visual_geometry")
 
     return {
         "source_json": str(args.json),
         "input": result.get("input") or {},
-        "center": translation,
-        "rotation": rotation,
-        "quaternion_xyzw": base_pose.get("quaternion_xyzw"),
-        "pose_rad": pose_rad,
-        "pose_deg": pose_deg,
+        "center": primary_pose["center"],
+        "rotation": primary_pose["rotation"],
+        "quaternion_xyzw": primary_pose["quaternion_xyzw"],
+        "pose_rad": primary_pose["pose_rad"],
+        "pose_deg": primary_pose["pose_deg"],
+        "pose_role": pose_role,
+        "candidate_index": candidate_index,
+        "candidate_score": candidate_score,
+        "reference_pose": {
+            **reference_pose,
+            "role": result.get("grasp_pose_base_role", "surface_normal_reference"),
+        },
         "quality_score": (result.get("quality") or {}).get("quality_score"),
         "warnings": result.get("warnings") or [],
+        "window": build_window_view_data(result),
         "axis_length": float(args.axis_length),
         "model": {
             "length": float(args.model_length),
@@ -205,13 +295,18 @@ def render_html(view_data: dict[str, Any]) -> str:
 <aside>
   <h1>Base Frame 3D Pose View</h1>
   <div class="legend">
-    <div><span class="swatch" style="background:#d92d20"></span>Base/object +X</div>
-    <div><span class="swatch" style="background:#079455"></span>Base/object +Y</div>
-    <div><span class="swatch" style="background:#1570ef"></span>Base/object +Z</div>
+    <div><span class="swatch" style="background:#d92d20"></span>Base/grasp +X</div>
+    <div><span class="swatch" style="background:#079455"></span>Base/grasp +Y</div>
+    <div><span class="swatch" style="background:#1570ef"></span>Base/grasp +Z</div>
     <div><span class="swatch" style="background:#f59e0b"></span>Simplified grasp body</div>
+    <div><span class="swatch" style="background:#94a3b8"></span>Surface-normal reference</div>
+    <div><span class="swatch" style="background:#0ea5e9"></span>Window</div>
+    <div><span class="swatch" style="background:#22d3ee"></span>Approach cone</div>
   </div>
   <h2>Pose</h2>
   <div id="pose"></div>
+  <h2>Window</h2>
+  <div id="window"></div>
   <h2>Quality</h2>
   <div id="quality"></div>
   <h2>Controls</h2>
@@ -223,6 +318,7 @@ const data = {data_json};
 const canvas = document.getElementById("scene");
 const ctx = canvas.getContext("2d");
 const poseEl = document.getElementById("pose");
+const windowEl = document.getElementById("window");
 const qualityEl = document.getElementById("quality");
 const state = {{
   yaw: -0.8,
@@ -250,12 +346,30 @@ function vec(values, digits = 6) {{
 function fillPanel() {{
   poseEl.innerHTML = [
     row("source", data.source_json),
+    row("visualized", data.pose_role || "n/a"),
+    row("candidate", data.candidate_index === null || data.candidate_index === undefined ? "n/a" : data.candidate_index),
+    row("score", data.candidate_score === null || data.candidate_score === undefined ? "n/a" : fmt(data.candidate_score, 4)),
     row("xyz m", vec(data.center)),
     row("rpy rad", vec(data.pose_rad)),
     row("rpy deg", vec(data.pose_deg)),
     row("quat xyzw", vec(data.quaternion_xyzw)),
     row("convention", data.convention)
   ].join("");
+  if (data.window) {{
+    const stats = data.window.candidate_stats || {{}};
+    const candidates = data.window.candidates || [];
+    const best = candidates.length ? candidates[0] : null;
+    windowEl.innerHTML = [
+      row("source", data.window.source || "n/a"),
+      row("size m", `${{fmt(data.window.width, 4)}} x ${{fmt(data.window.height, 4)}}`),
+      row("effective", `${{fmt(data.window.effective_width, 4)}} x ${{fmt(data.window.effective_height, 4)}}`),
+      row("margin", fmt(data.window.margin, 4)),
+      row("candidates", `${{stats.kept_count ?? candidates.length}} / ${{stats.sampled_count ?? "n/a"}}`),
+      row("best score", best ? fmt(best.score, 4) : "n/a")
+    ].join("");
+  }} else {{
+    windowEl.innerHTML = row("window", "not available");
+  }}
   qualityEl.innerHTML = [
     row("score", fmt(data.quality_score, 4)),
     row("warnings", (data.warnings || []).length ? data.warnings.join("<br>") : "none"),
@@ -274,11 +388,15 @@ function matVec(m, v) {{
   ];
 }}
 
-function objectPoint(local) {{
-  return add(data.center, matVec(data.rotation, local));
+function poseAxisVector(pose, column) {{
+  return [pose.rotation[0][column], pose.rotation[1][column], pose.rotation[2][column]];
 }}
 
-function buildCuboid() {{
+function posePoint(local, pose = data) {{
+  return add(pose.center, matVec(pose.rotation, local));
+}}
+
+function buildCuboid(pose = data) {{
   const hx = data.model.length / 2;
   const hy = data.model.width / 2;
   const hz = data.model.thickness / 2;
@@ -286,7 +404,7 @@ function buildCuboid() {{
     [-hx, -hy, -hz], [ hx, -hy, -hz], [ hx,  hy, -hz], [-hx,  hy, -hz],
     [-hx, -hy,  hz], [ hx, -hy,  hz], [ hx,  hy,  hz], [-hx,  hy,  hz]
   ];
-  const v = local.map(objectPoint);
+  const v = local.map(p => posePoint(p, pose));
   const faces = [
     [0, 1, 2, 3], [4, 7, 6, 5], [0, 4, 5, 1],
     [1, 5, 6, 2], [2, 6, 7, 3], [3, 7, 4, 0]
@@ -294,18 +412,32 @@ function buildCuboid() {{
   return {{ v, faces }};
 }}
 
-function axisEnd(column, length) {{
-  return add(data.center, mul([data.rotation[0][column], data.rotation[1][column], data.rotation[2][column]], length));
+function axisEnd(column, length, pose = data) {{
+  return add(pose.center, mul(poseAxisVector(pose, column), length));
 }}
 
 function allScenePoints() {{
   const body = buildCuboid();
   const l = data.axis_length;
-  return [
+  const points = [
     [0, 0, 0], [l, 0, 0], [0, l, 0], [0, 0, l],
     data.center, axisEnd(0, l), axisEnd(1, l), axisEnd(2, l),
     ...body.v
   ];
+  if (data.reference_pose) {{
+    points.push(data.reference_pose.center);
+    points.push(axisEnd(0, l, data.reference_pose));
+    points.push(axisEnd(1, l, data.reference_pose));
+    points.push(axisEnd(2, l, data.reference_pose));
+  }}
+  if (data.window) {{
+    if (Array.isArray(data.window.full_corners)) points.push(...data.window.full_corners);
+    if (Array.isArray(data.window.effective_corners)) points.push(...data.window.effective_corners);
+    for (const candidate of data.window.candidates || []) {{
+      points.push(candidate.window_point);
+    }}
+  }}
+  return points;
 }}
 
 function sceneFocus() {{
@@ -412,6 +544,93 @@ function drawCuboid(focus, scale) {{
   }}
 }}
 
+function drawPolygon(points, focus, scale, fillStyle, strokeStyle, lineWidth = 1.5) {{
+  if (!Array.isArray(points) || points.length < 3) return;
+  const projected = points.map(p => project(p, focus, scale));
+  ctx.beginPath();
+  for (let i = 0; i < projected.length; i++) {{
+    const p = projected[i];
+    if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+  }}
+  ctx.closePath();
+  if (fillStyle) {{
+    ctx.fillStyle = fillStyle;
+    ctx.fill();
+  }}
+  ctx.strokeStyle = strokeStyle;
+  ctx.lineWidth = lineWidth;
+  ctx.stroke();
+}}
+
+function drawPlainLine(a, b, color, width = 1.5) {{
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+}}
+
+function drawDashedLine(a, b, color, label, width = 2) {{
+  ctx.save();
+  ctx.setLineDash([7, 5]);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+  ctx.restore();
+  ctx.font = "12px ui-monospace, monospace";
+  ctx.fillStyle = color;
+  ctx.fillText(label, b.x + 6, b.y + 12);
+}}
+
+function faceDepth(points, focus) {{
+  return points.reduce((sum, point) => sum + viewPoint(point, focus)[2], 0) / points.length;
+}}
+
+function drawWindowAndCone(focus, scale) {{
+  if (!data.window) return;
+  const full = data.window.full_corners || [];
+  const effective = data.window.effective_corners || [];
+  const center = data.center;
+  const faces = [];
+
+  if (effective.length === 4) {{
+    faces.push({{ points: effective, fill: "rgba(14, 165, 233, 0.16)", stroke: "rgba(2, 132, 199, 0.95)", width: 2.4 }});
+    for (let i = 0; i < 4; i++) {{
+      faces.push({{
+        points: [center, effective[i], effective[(i + 1) % 4]],
+        fill: "rgba(34, 211, 238, 0.18)",
+        stroke: "rgba(8, 145, 178, 0.42)",
+        width: 1.1
+      }});
+    }}
+  }}
+  if (full.length === 4) {{
+    faces.push({{ points: full, fill: "rgba(100, 116, 139, 0.10)", stroke: "rgba(71, 85, 105, 0.9)", width: 1.8 }});
+  }}
+
+  faces.sort((a, b) => faceDepth(a.points, focus) - faceDepth(b.points, focus));
+  for (const face of faces) {{
+    drawPolygon(face.points, focus, scale, face.fill, face.stroke, face.width);
+  }}
+
+  const centerPx = project(center, focus, scale);
+  const candidates = data.window.candidates || [];
+  for (let i = 0; i < candidates.length; i++) {{
+    const candidate = candidates[i];
+    const p = project(candidate.window_point, focus, scale);
+    const isBest = i === 0;
+    drawPlainLine(p, centerPx, isBest ? "rgba(14, 116, 144, 0.95)" : "rgba(71, 85, 105, 0.38)", isBest ? 3.2 : 1.3);
+    ctx.fillStyle = isBest ? "#0e7490" : "#64748b";
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, isBest ? 4.2 : 2.8, 0, Math.PI * 2);
+    ctx.fill();
+  }}
+}}
+
 function draw() {{
   const rect = canvas.getBoundingClientRect();
   canvas.width = Math.max(1, Math.round(rect.width));
@@ -421,6 +640,7 @@ function draw() {{
   const focus = sceneFocus();
   const scale = projectedScale(focus);
   drawGrid(focus, scale);
+  drawWindowAndCone(focus, scale);
   drawCuboid(focus, scale);
 
   const origin = project([0, 0, 0], focus, scale);
@@ -429,14 +649,21 @@ function draw() {{
   drawLine(origin, project([0, l, 0], focus, scale), "#079455", "base +Y", 3);
   drawLine(origin, project([0, 0, l], focus, scale), "#1570ef", "base +Z", 3);
 
+  if (data.reference_pose && data.pose_role === "best_grasp_pose_base") {{
+    const refCenter = project(data.reference_pose.center, focus, scale);
+    drawDashedLine(refCenter, project(axisEnd(0, l, data.reference_pose), focus, scale), "rgba(185, 28, 28, 0.62)", "ref +X", 2);
+    drawDashedLine(refCenter, project(axisEnd(1, l, data.reference_pose), focus, scale), "rgba(4, 120, 87, 0.62)", "ref +Y", 2);
+    drawDashedLine(refCenter, project(axisEnd(2, l, data.reference_pose), focus, scale), "rgba(29, 78, 216, 0.62)", "ref +Z", 2);
+  }}
+
   const center = project(data.center, focus, scale);
   ctx.fillStyle = "#111827";
   ctx.beginPath();
   ctx.arc(center.x, center.y, 4.5, 0, Math.PI * 2);
   ctx.fill();
-  drawLine(center, project(axisEnd(0, l), focus, scale), "#d92d20", "obj +X tail->head", 4);
-  drawLine(center, project(axisEnd(1, l), focus, scale), "#079455", "obj +Y closing", 4);
-  drawLine(center, project(axisEnd(2, l), focus, scale), "#1570ef", "obj +Z approach", 4);
+  drawLine(center, project(axisEnd(0, l), focus, scale), "#d92d20", "grasp +X", 4);
+  drawLine(center, project(axisEnd(1, l), focus, scale), "#079455", "grasp +Y", 4);
+  drawLine(center, project(axisEnd(2, l), focus, scale), "#1570ef", "grasp +Z", 4);
 }}
 
 canvas.addEventListener("mousedown", event => {{

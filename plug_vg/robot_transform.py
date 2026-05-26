@@ -7,12 +7,13 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import yaml
 
 from .geometry import rotation_to_quaternion_xyzw
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
+    import yaml
+
     with path.open("r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
     if not isinstance(data, dict):
@@ -148,16 +149,3 @@ def convert_camera_grasp_to_base(
     }
     return result
 
-
-class RobotPoseProvider:
-    """Placeholder for future realtime robot-pose integration."""
-
-    def __init__(self, config_path: Path):
-        self.config_path = config_path
-        self.config = load_yaml(config_path)
-
-    def get_current_pose(self) -> list[float]:
-        raise NotImplementedError(
-            "Realtime robot pose provider is not implemented yet. "
-            "Use --robot-pose x y z roll pitch yaw to validate base-frame conversion."
-        )

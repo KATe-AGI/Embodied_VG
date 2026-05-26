@@ -6,13 +6,14 @@ import math
 from pathlib import Path
 from typing import Any
 
-import cv2
 import numpy as np
 
 from .config import GRASP_REGION_THICKNESS_M
 
 
 def polygon_mask(polygon_xy: list[list[float]], shape: tuple[int, int]) -> np.ndarray:
+    import cv2
+
     mask = np.zeros(shape, dtype=np.uint8)
     if not polygon_xy:
         return mask
@@ -318,6 +319,8 @@ def draw_overlay(
     axis_scale: float,
     axis_thickness: int,
 ) -> None:
+    import cv2
+
     image_path = record.get("image")
     image = cv2.imread(str(image_path)) if image_path else None
     if image is None:
