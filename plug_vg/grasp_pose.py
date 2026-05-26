@@ -19,11 +19,11 @@ from .geometry import (
     depth_to_points,
     derive_grasp_target_2d,
     draw_overlay,
-    grasp_center_from_surface,
     keypoint_3d,
     polygon_mask,
     robust_depth_filter,
     robust_extent,
+    robust_midsection_center,
     rotation_to_quaternion_xyzw,
     save_ply,
 )
@@ -163,7 +163,15 @@ def estimate_record(
     if rotation is None:
         return make_failure(record, raw_id, d2rgb_path, "rotation_estimation_failed", warnings), mask, points, None, head_xy, tail_xy
 
-    grasp_center_3d, grasp_center_info = grasp_center_from_surface(grasp_target_3d, rotation)
+    grasp_center_3d, grasp_center_info = robust_midsection_center(
+        points,
+        pixels,
+        mask,
+        head_xy,
+        tail_xy,
+        rotation,
+        warnings,
+    )
 
     extents = robust_extent(points, center, rotation)
     length_error = abs(extents["length_x_m"] - GRASP_REGION_LENGTH_M) / GRASP_REGION_LENGTH_M
@@ -207,6 +215,7 @@ def estimate_record(
             "grasp_target": grasp_target_info,
             "grasp_target_camera_m": [round(float(v), 8) for v in grasp_center_3d.tolist()],
             "grasp_surface_anchor_camera_m": [round(float(v), 8) for v in grasp_target_3d.tolist()],
+            "grasp_center_estimation": grasp_center_info,
             "grasp_center_adjustment": grasp_center_info,
             "mask_point_mean_m": [round(float(v), 8) for v in mean.tolist()],
             "mask_point_median_m": [round(float(v), 8) for v in center.tolist()],
