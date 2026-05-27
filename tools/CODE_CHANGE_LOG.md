@@ -1,5 +1,11 @@
 # 代码修改日志
 
+## 2026-05-27 - 抓取点支持 Mask/轴线融合锚点与轴向微调
+
+- 抓取点表面锚点改为由 mask 主体中心和 tail→head 轴线投影中心融合得到，避免关键点偏移直接拖动中段区域。
+- 新增 `--grasp-axis-offset-m`，可沿插头 `tail -> head` 轴手动微调最终抓取点。
+- `quality.grasp_center_estimation` 增加融合锚点、轴向偏移和最终抓取点诊断字段。
+
 ## 2026-05-26 - 抓取点改为鲁棒中段几何中心
 
 - `grasp_pose_camera.translation_m` 不再由单个表面锚点直接偏移得到。

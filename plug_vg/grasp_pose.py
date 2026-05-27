@@ -171,6 +171,7 @@ def estimate_record(
         tail_xy,
         rotation,
         warnings,
+        axis_offset_m=getattr(args, "grasp_axis_offset_m", 0.0),
     )
 
     extents = robust_extent(points, center, rotation)
@@ -190,6 +191,7 @@ def estimate_record(
             "image": record.get("image"),
             "raw_id": raw_id,
             "d2rgb": str(d2rgb_path),
+            "grasp_axis_offset_m": float(getattr(args, "grasp_axis_offset_m", 0.0)),
         },
         "camera": {
             "frame": camera.get("camera_frame", "camera_rgb"),

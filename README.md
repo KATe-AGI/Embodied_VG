@@ -65,6 +65,7 @@ python infer_6d_single.py \
   --d2rgb plug_dataset_all_20260520/rgbd_test/D2RGB/D2RGB_20260519_215321_955_7.png \
   --robot-pose 0.42 -0.18 0.63 0.3 -0.2 0.5 \
   --output-dir ultralytics/runs/plug_6d_single \
+  --grasp-axis-offset-m 0.0 \
   --save-overlay
 ```
 
@@ -89,8 +90,8 @@ The output JSON contains:
 - `grasp_pose_base`: the visual estimate transformed to robot base frame. In direct-visual mode this is the final grasp pose; in window-constrained mode it is a `surface_normal_reference`.
 - `window_constrained_grasp_candidates`: sorted base-frame grasp poses constrained by the window geometry; present only in window-constrained mode.
 - `best_grasp_pose_base`: the first window candidate and the downstream grasp pose to consume; present only in window-constrained mode.
-- `grasp_point_base_m`: final grasp point `(x, y, z)` in the robot base frame. It is estimated from a robust midsection 3D center, not from a single surface anchor point.
+- `grasp_point_base_m`: final grasp point `(x, y, z)` in the robot base frame. It is estimated from a mask-and-axis fused surface anchor, then offset to the midsection volume center.
 - `tail_to_head_axis_base`: virtual tail/head endpoints on the plug `tail -> head` axis. The axis uses the visual reference pose `+X`, is centered on `grasp_point_base_m`, and uses the configured plug head-tail distance.
-- `quality.grasp_center_estimation`: diagnostics for the robust midsection center, including candidate counts, depth outlier rejection, surface center, and the half-thickness center offset.
+- `quality.grasp_center_estimation`: diagnostics for the fused 2D anchor, depth outlier rejection, surface center, half-thickness center offset, and optional `--grasp-axis-offset-m` adjustment.
 
 In direct-visual mode, the grasp frame is the original visual grasp coordinate system. In window-constrained mode, `best_grasp_pose_base` uses the selected window approach frame while `tail_to_head_axis_base` still describes the plug body's visual `tail -> head` direction.

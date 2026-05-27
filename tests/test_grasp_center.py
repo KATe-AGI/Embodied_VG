@@ -39,6 +39,7 @@ class RobustMidsectionCenterTests(unittest.TestCase):
         self.assert_center_near_expected(center)
         self.assertEqual(info["mode"], "robust_midsection_center")
         self.assertEqual(info["source"], "midsection")
+        self.assertEqual(info["keypoints_used_for_midsection"], False)
         self.assertGreaterEqual(info["filtered_count"], 30)
         self.assertEqual(warnings, [])
 
@@ -56,7 +57,11 @@ class RobustMidsectionCenterTests(unittest.TestCase):
         center, info = robust_midsection_center(points, pixels, mask, head_xy, tail_xy, rotation, warnings)
 
         self.assert_center_near_expected(center)
-        self.assertGreater(info["rejected_reason_counts"]["local_z_outlier"], 0)
+        rejected_depth = (
+            info["rejected_reason_counts"]["local_z_outlier"]
+            + info["rejected_reason_counts"]["fused_anchor_region"]
+        )
+        self.assertGreater(rejected_depth, 0)
         self.assertEqual(info["source"], "midsection")
 
     def test_center_rejects_background_depth_outliers(self) -> None:
@@ -73,7 +78,11 @@ class RobustMidsectionCenterTests(unittest.TestCase):
         center, info = robust_midsection_center(points, pixels, mask, head_xy, tail_xy, rotation, warnings)
 
         self.assert_center_near_expected(center)
-        self.assertGreater(info["rejected_reason_counts"]["local_z_outlier"], 0)
+        rejected_depth = (
+            info["rejected_reason_counts"]["local_z_outlier"]
+            + info["rejected_reason_counts"]["fused_anchor_region"]
+        )
+        self.assertGreater(rejected_depth, 0)
         self.assertEqual(info["source"], "midsection")
 
     def test_boundary_background_is_ignored_by_mask_interior_filter(self) -> None:
@@ -92,7 +101,7 @@ class RobustMidsectionCenterTests(unittest.TestCase):
         self.assert_center_near_expected(center)
         self.assertGreater(info["rejected_reason_counts"]["mask_boundary"], 0)
 
-    def test_fallback_to_full_mask_when_midsection_has_too_few_points(self) -> None:
+    def test_fallback_to_full_mask_when_local_anchor_has_too_few_points(self) -> None:
         points, pixels, mask, head_xy, tail_xy, rotation = self.make_scene()
         warnings: list[str] = []
 
@@ -104,13 +113,63 @@ class RobustMidsectionCenterTests(unittest.TestCase):
             tail_xy,
             rotation,
             warnings,
-            axis_range=(0.49, 0.51),
-            min_points=200,
+            min_points=len(points) + 1,
         )
 
         self.assert_center_near_expected(center)
         self.assertEqual(info["source"], "fallback_full_mask")
         self.assertIn("robust_midsection_center_fallback_full_mask", warnings)
+
+    def test_keypoint_shift_does_not_move_mask_axis_anchor(self) -> None:
+        points, pixels, mask, _head_xy, _tail_xy, rotation = self.make_scene()
+        shifted_head_xy = [135.0, 50.0]
+        shifted_tail_xy = [35.0, 50.0]
+        warnings: list[str] = []
+
+        center, info = robust_midsection_center(points, pixels, mask, shifted_head_xy, shifted_tail_xy, rotation, warnings)
+
+        self.assert_center_near_expected(center)
+        self.assertEqual(info["keypoints_used_for_midsection"], False)
+        self.assertEqual(info["source"], "midsection")
+
+    def test_axis_offset_moves_final_center_along_tail_to_head_x(self) -> None:
+        points, pixels, mask, head_xy, tail_xy, rotation = self.make_scene()
+        warnings: list[str] = []
+
+        center, info = robust_midsection_center(
+            points,
+            pixels,
+            mask,
+            head_xy,
+            tail_xy,
+            rotation,
+            warnings,
+            axis_offset_m=0.01,
+        )
+
+        expected = np.asarray([0.01, -0.0005, 1.0 + GRASP_REGION_THICKNESS_M * 0.5], dtype=np.float64)
+        np.testing.assert_allclose(center, expected, atol=0.0015)
+        np.testing.assert_allclose(info["axis_offset_vector_camera_m"], [0.01, 0.0, 0.0], atol=1e-8)
+        self.assertEqual(info["axis_offset_direction"], "tail_to_head")
+
+    def test_negative_axis_offset_moves_toward_tail(self) -> None:
+        points, pixels, mask, head_xy, tail_xy, rotation = self.make_scene()
+        warnings: list[str] = []
+
+        center, info = robust_midsection_center(
+            points,
+            pixels,
+            mask,
+            head_xy,
+            tail_xy,
+            rotation,
+            warnings,
+            axis_offset_m=-0.01,
+        )
+
+        expected = np.asarray([-0.01, -0.0005, 1.0 + GRASP_REGION_THICKNESS_M * 0.5], dtype=np.float64)
+        np.testing.assert_allclose(center, expected, atol=0.0015)
+        np.testing.assert_allclose(info["axis_offset_vector_camera_m"], [-0.01, 0.0, 0.0], atol=1e-8)
 
 
 if __name__ == "__main__":

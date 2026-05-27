@@ -43,9 +43,9 @@ python infer_6d_single.py `
 
 ubuntu:
 python infer_6d_single.py \
-  --rgb test_20260523/color_20260523_142307_548_0.png \
-  --d2rgb test_20260523/D2RGB_20260523_142307_548_0.png \
-  --robot-pose  -0.6119 -0.0641 0.5842 -2.174 0.080 1.449 \
+  --rgb test_20260523/color_20260523_112930_755_0.png \
+  --d2rgb test_20260523/D2RGB_20260523_112930_755_0.png \
+  --robot-pose  -0.58694 -0.03700 0.59149 -2.097 0.000 1.555 \
   --output-dir ultralytics/runs/plug_6d_single \
   --window-config configs/window/box_window.yaml \
   --save-overlay \
@@ -87,10 +87,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-depth", type=float, default=0.1, help="Minimum valid depth in meters.")
     parser.add_argument("--max-depth", type=float, default=1.0, help="Maximum valid depth in meters.")
     parser.add_argument("--min-points", type=int, default=200, help="Minimum filtered mask point count.")
-    parser.add_argument("--keypoint-window", type=int, default=5, help="Odd pixel window size for keypoint depth lookup.")
+    parser.add_argument("--keypoint-window", type=int, default=7, help="Odd pixel window size for keypoint depth lookup.")
     parser.add_argument("--plane-threshold", type=float, default=0.004, help="RANSAC plane inlier threshold in meters.")
     parser.add_argument("--ransac-iters", type=int, default=128, help="RANSAC plane iterations.")
     parser.add_argument("--head-tail-tolerance", type=float, default=0.35, help="Relative tolerance for 3D head-tail distance.")
+    parser.add_argument("--grasp-axis-offset-m", type=float, default=0.0, help="Manual grasp point offset along plug tail-to-head +X axis, in meters. Positive moves toward head.")
     parser.add_argument("--axis-scale", type=float, default=0.1, help="Overlay XYZ axis length in meters.")
     parser.add_argument("--axis-thickness", type=int, default=5, help="Overlay XYZ axis line thickness in pixels.")
     parser.add_argument("--save-overlay", action="store_true", help="Save YOLO and 3D grasp overlays.")
@@ -138,6 +139,7 @@ def make_failure(args: argparse.Namespace, reason: str, warnings: list[str] | No
             "image": str(args.rgb),
             "d2rgb": str(args.d2rgb),
             "robot_pose_xyzrpy_m_rad": [float(v) for v in args.robot_pose],
+            "grasp_axis_offset_m": float(args.grasp_axis_offset_m),
             "window_config": None if args.window_config is None else str(args.window_config),
             "window_corners_base_provided": args.window_corners_base is not None,
             "window_constraint_enabled": window_constraint_requested(args),
@@ -317,6 +319,7 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
             "image": str(args.rgb),
             "d2rgb": str(args.d2rgb),
             "robot_pose_xyzrpy_m_rad": [float(v) for v in args.robot_pose],
+            "grasp_axis_offset_m": float(args.grasp_axis_offset_m),
             "window_config": None if args.window_config is None else str(args.window_config),
             "window_corners_base_provided": args.window_corners_base is not None,
             "window_constraint_enabled": window_requested,

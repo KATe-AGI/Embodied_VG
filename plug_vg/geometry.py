@@ -15,6 +15,10 @@ MIDSECTION_AXIS_RANGE = (0.4, 0.6)
 MIDSECTION_MIN_POINTS = 30
 MASK_INTERIOR_DISTANCE_PX = 2.0
 LOCAL_Z_MIN_TOLERANCE_M = 0.006
+FUSED_ANCHOR_RADIUS_FRACTION = 0.18
+FUSED_ANCHOR_MIN_RADIUS_PX = 8.0
+FUSED_ANCHOR_AXIS_CONFIDENCE_PX = 5.0
+FUSED_ANCHOR_MAX_AXIS_WEIGHT = 0.35
 
 
 def polygon_mask(polygon_xy: list[list[float]], shape: tuple[int, int]) -> np.ndarray:
@@ -331,8 +335,89 @@ def _interior_pixel_keep(mask: np.ndarray, pixels: np.ndarray, min_distance_px: 
     xy = np.round(pixels).astype(np.int32)
     xs = np.clip(xy[:, 0], 0, w - 1)
     ys = np.clip(xy[:, 1], 0, h - 1)
-    distance = cv2.distanceTransform((mask > 0).astype(np.uint8), cv2.DIST_L2, 3)
-    return distance[ys, xs] >= float(min_distance_px)
+    margin = max(3, int(math.ceil(float(min_distance_px))) + 2)
+    x0 = max(0, int(np.min(xs)) - margin)
+    x1 = min(w, int(np.max(xs)) + margin + 1)
+    y0 = max(0, int(np.min(ys)) - margin)
+    y1 = min(h, int(np.max(ys)) + margin + 1)
+    cropped = (mask[y0:y1, x0:x1] > 0).astype(np.uint8)
+    distance = cv2.distanceTransform(cropped, cv2.DIST_L2, 3)
+    return distance[ys - y0, xs - x0] >= float(min_distance_px)
+
+
+def _stable_axis_from_mask_pixels(pixels: np.ndarray, head_xy: list[float], tail_xy: list[float]) -> tuple[np.ndarray, str]:
+    centered = pixels - np.mean(pixels, axis=0)
+    if len(centered) >= 3:
+        cov = np.cov(centered.T)
+        values, vectors = np.linalg.eigh(cov)
+        order = np.argsort(values)[::-1]
+        if float(values[order[0]]) > 1e-9:
+            axis = vectors[:, order[0]]
+            source = "mask_pca"
+        else:
+            axis = np.asarray([1.0, 0.0], dtype=np.float64)
+            source = "mask_bbox_fallback"
+    else:
+        axis = np.asarray([1.0, 0.0], dtype=np.float64)
+        source = "mask_bbox_fallback"
+
+    span = np.ptp(pixels, axis=0)
+    if source == "mask_bbox_fallback":
+        axis = np.asarray([1.0, 0.0], dtype=np.float64) if span[0] >= span[1] else np.asarray([0.0, 1.0], dtype=np.float64)
+
+    keypoint_axis = np.asarray(head_xy, dtype=np.float64) - np.asarray(tail_xy, dtype=np.float64)
+    if float(np.linalg.norm(keypoint_axis)) > 1e-6 and float(np.dot(axis, keypoint_axis)) < 0.0:
+        axis = -axis
+    norm = float(np.linalg.norm(axis))
+    if norm < 1e-9:
+        return np.asarray([1.0, 0.0], dtype=np.float64), "mask_bbox_fallback"
+    return axis / norm, source
+
+
+def _fused_anchor_keep(
+    pixels: np.ndarray,
+    candidate: np.ndarray,
+    head_xy: list[float],
+    tail_xy: list[float],
+    min_points: int,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    candidate_pixels = pixels[candidate]
+    if len(candidate_pixels) == 0:
+        return np.zeros(len(pixels), dtype=bool), {"source": "empty_candidate"}
+
+    mask_center = np.median(candidate_pixels, axis=0)
+    axis_unit, axis_source = _stable_axis_from_mask_pixels(candidate_pixels, head_xy, tail_xy)
+    tail = np.asarray(tail_xy, dtype=np.float64)
+    axis_point = tail + axis_unit * float(np.dot(mask_center - tail, axis_unit))
+    axis_distance = float(np.linalg.norm(mask_center - axis_point))
+    axis_weight = FUSED_ANCHOR_MAX_AXIS_WEIGHT / (1.0 + (axis_distance / FUSED_ANCHOR_AXIS_CONFIDENCE_PX) ** 2)
+    fused_anchor = mask_center * (1.0 - axis_weight) + axis_point * axis_weight
+
+    projected = (candidate_pixels - mask_center) @ axis_unit
+    p05, p95 = np.percentile(projected, [5, 95])
+    body_length_px = max(1.0, float(p95 - p05))
+    radius_px = max(FUSED_ANCHOR_MIN_RADIUS_PX, body_length_px * FUSED_ANCHOR_RADIUS_FRACTION)
+    distances = np.linalg.norm(candidate_pixels - fused_anchor, axis=1)
+    local_keep = distances <= radius_px
+    if int(np.count_nonzero(local_keep)) < min_points:
+        radius_px = max(radius_px, float(np.percentile(distances, min(100.0, 100.0 * min_points / max(1, len(distances))))))
+        local_keep = distances <= radius_px
+
+    keep = np.zeros(len(pixels), dtype=bool)
+    keep[np.flatnonzero(candidate)] = local_keep
+    info = {
+        "source": "mask_axis_fused_anchor",
+        "midsection_axis_source": axis_source,
+        "midsection_axis_2d": _round_vector(axis_unit),
+        "mask_center_2d": _round_vector(mask_center, digits=3),
+        "axis_projected_center_2d": _round_vector(axis_point, digits=3),
+        "fused_anchor_2d": _round_vector(fused_anchor, digits=3),
+        "axis_center_distance_px": round(axis_distance, 4),
+        "axis_fusion_weight": round(float(axis_weight), 6),
+        "local_radius_px": round(float(radius_px), 4),
+        "keypoints_used_for_midsection": False,
+    }
+    return keep, info
 
 
 def _center_from_indices(
@@ -384,6 +469,7 @@ def robust_midsection_center(
     axis_range: tuple[float, float] = MIDSECTION_AXIS_RANGE,
     min_points: int = MIDSECTION_MIN_POINTS,
     interior_distance_px: float = MASK_INTERIOR_DISTANCE_PX,
+    axis_offset_m: float = 0.0,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """Estimate a plug midsection center from robust in-mask midsection points."""
 
@@ -401,10 +487,11 @@ def robust_midsection_center(
     offset_m = float(GRASP_REGION_THICKNESS_M) * 0.5
     rejected = {
         "mask_boundary": 0,
-        "axis_midsection": 0,
+        "fused_anchor_region": 0,
         "local_z_outlier": 0,
         "fallback_local_z_outlier": 0,
     }
+    anchor_info: dict[str, Any] = {}
 
     candidate = np.ones(len(points), dtype=bool)
     if mask.size and interior_distance_px > 0:
@@ -413,23 +500,12 @@ def robust_midsection_center(
             rejected["mask_boundary"] = int(np.count_nonzero(candidate & ~interior_keep))
             candidate &= interior_keep
 
-    head = np.asarray(head_xy, dtype=np.float64)
-    tail = np.asarray(tail_xy, dtype=np.float64)
-    axis = head - tail
-    axis_norm = float(np.linalg.norm(axis))
-    if axis_norm >= 1e-6:
-        axis_unit = axis / axis_norm
-        progress = ((pixels - tail) @ axis_unit) / axis_norm
-        lo, hi = float(axis_range[0]), float(axis_range[1])
-        axis_keep = (progress >= lo) & (progress <= hi)
-        if int(np.count_nonzero(candidate & axis_keep)) < min_points:
-            projected = (pixels[candidate] - tail) @ axis_unit
-            if len(projected) >= min_points:
-                p_lo, p_hi = np.percentile(projected, [lo * 100.0, hi * 100.0])
-                axis_keep = np.zeros(len(points), dtype=bool)
-                axis_keep[candidate] = (projected >= p_lo) & (projected <= p_hi)
-        rejected["axis_midsection"] = int(np.count_nonzero(candidate & ~axis_keep))
-        candidate &= axis_keep
+    anchor_keep, anchor_info = _fused_anchor_keep(pixels, candidate, head_xy, tail_xy, min_points)
+    if int(np.count_nonzero(candidate & anchor_keep)) >= min_points:
+        rejected["fused_anchor_region"] = int(np.count_nonzero(candidate & ~anchor_keep))
+        candidate &= anchor_keep
+    else:
+        warnings.append("robust_midsection_center_fused_anchor_fallback_interior_mask")
 
     midsection_candidate_count = int(np.count_nonzero(candidate))
     local_all = (points - origin) @ rotation
@@ -453,7 +529,7 @@ def robust_midsection_center(
         final_indices = np.arange(len(points))
         warnings.append("robust_midsection_center_fallback_all_points")
 
-    center, center_info = _center_from_indices(
+    auto_center, center_info = _center_from_indices(
         points,
         final_indices,
         origin,
@@ -461,6 +537,9 @@ def robust_midsection_center(
         offset_m,
         "fallback_full_mask" if used_fallback else "midsection",
     )
+    axis_offset = float(axis_offset_m)
+    axis_offset_vector = rotation[:, 0] * axis_offset
+    center = auto_center.astype(np.float64) + axis_offset_vector
     info = {
         "mode": "robust_midsection_center",
         "axis_range": [round(float(axis_range[0]), 4), round(float(axis_range[1]), 4)],
@@ -472,9 +551,15 @@ def robust_midsection_center(
         "center_offset_axis": "+z_approach",
         "center_offset_m": round(float(offset_m), 8),
         "thickness_m": round(float(GRASP_REGION_THICKNESS_M), 8),
+        "auto_grasp_center_camera_m": _round_vector(auto_center.astype(np.float64)),
+        "axis_offset_m": round(axis_offset, 8),
+        "axis_offset_direction": "tail_to_head",
+        "axis_offset_vector_camera_m": _round_vector(axis_offset_vector),
+        "final_grasp_center_camera_m": _round_vector(center),
+        **anchor_info,
         **center_info,
     }
-    return center, info
+    return center.astype(np.float32), info
 
 
 def draw_overlay(
