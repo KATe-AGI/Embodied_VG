@@ -27,7 +27,7 @@ from .geometry import (
     rotation_to_quaternion_xyzw,
     save_ply,
 )
-from .io import first_detection, raw_id_from_image
+from .io import first_detection, raw_id_from_image, read_depth_raw
 
 
 def resolve_d2rgb_path(record: dict[str, Any], manifest: dict[str, Path], dataset: Path) -> tuple[Path | None, str | None]:
@@ -95,7 +95,7 @@ def estimate_record(
     if not head_xy or not tail_xy:
         return make_failure(record, raw_id, d2rgb_path, "head_tail_keypoints_missing", warnings), None, None, None, None, None
 
-    depth_raw = cv2.imread(str(d2rgb_path), cv2.IMREAD_UNCHANGED)
+    depth_raw = read_depth_raw(d2rgb_path)
     if depth_raw is None:
         return make_failure(record, raw_id, d2rgb_path, "d2rgb_depth_unreadable", warnings), None, None, None, None, None
     if depth_raw.ndim == 3:

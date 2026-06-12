@@ -1,18 +1,19 @@
 # Camera intrinsics used by the RGB-D 6D grasp pipeline.
 #
-# The 6D grasp pipeline reads plug_dataset/rgbd_test/D2RGB/D2RGB_*.png.
+# Current camera: Intel RealSense D435IF stereo camera.
+# Values were copied from test_20260612/20260612_162528_117_meta.json.
 # D2RGB depth images are registered into the RGB image plane, so their pixel
-# coordinates match rgbd_test/color images and LabelMe annotations at 1920 x 1080.
+# coordinates match RGB images and LabelMe annotations at 1920 x 1080.
 
 camera_frame: camera_rgb
 depth_image: D2RGB
 image_width: 1920
 image_height: 1080
 
-fx: 1171.5
-fy: 1172.6
-cx: 1012.3
-cy: 541.94
+fx: 1359.2
+fy: 1358.4
+cx: 984.7
+cy: 552.1
 
 # Raw D2RGB uint16 values are millimeters.
 depth_scale: 0.001

@@ -13,7 +13,7 @@ import numpy as np
 
 from plug_vg.config import DEFAULT_CAMERA, ROOT, load_camera
 from plug_vg.geometry import save_ply
-from plug_vg.io import write_json
+from plug_vg.io import read_depth_raw, write_json
 from plug_vg.linebox_depth import (
     choose_farthest_stable_depth_peak,
     clamp_roi,
@@ -126,7 +126,7 @@ def print_result(result: dict[str, Any], output_path: Path) -> None:
 
 
 def read_depth_m(path: Path, camera: dict[str, Any], warnings: list[str]) -> np.ndarray | None:
-    depth_raw = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    depth_raw = read_depth_raw(path)
     if depth_raw is None:
         return None
     if depth_raw.ndim == 3:

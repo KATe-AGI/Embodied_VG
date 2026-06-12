@@ -15,7 +15,7 @@ import numpy as np
 from plug_vg.config import DEFAULT_CAMERA, DEFAULT_POSE_WEIGHTS, DEFAULT_SEG_WEIGHTS, ROOT, load_camera
 from plug_vg.geometry import draw_overlay as draw_3d_overlay, save_ply
 from plug_vg.grasp_pose import estimate_record
-from plug_vg.io import raw_id_from_image, write_json
+from plug_vg.io import raw_id_from_image, read_depth_raw, write_json
 from plug_vg.robot_transform import convert_camera_grasp_to_base, load_hand_eye_matrix, robot_pose_to_matrix
 from plug_vg.vision import draw_overlay as draw_stage1_overlay, run_models
 from plug_vg.window_grasp import (
@@ -32,10 +32,20 @@ from infer import YOLO
 
 r'''
 windows:
+不带窗口约束（默认）
 python infer_6d_single.py `
-  --rgb test_20260525\undistort_color_20260525_152152_943_0.png `
-  --d2rgb test_20260525\D2RGB_20260525_152152_943_0.png `
-  --robot-pose  -0.58694 -0.03700 0.59149 -2.097 0.000 1.555 `
+  --rgb test_20260612/20260612_162528_117_color.png `
+  --d2rgb test_20260612/20260612_162528_117_d2rgb.npy `
+  --robot-pose  -0.712547 0.000064 0.581025 -2.279 0.216 1.488 `
+  --output-dir ultralytics/runs/plug_6d_single `
+  --window-config configs/window/box_window.yaml `
+  --save-overlay
+
+带窗口约束
+python infer_6d_single.py `
+  --rgb test_20260612/20260612_162528_117_color.png `
+  --d2rgb test_20260612/20260612_162528_117_d2rgb.npy `
+  --robot-pose  -0.712547 0.000064 0.581025 -2.279 0.216 1.488 `
   --output-dir ultralytics/runs/plug_6d_single `
   --window-config configs/window/box_window.yaml `
   --save-overlay
@@ -43,18 +53,17 @@ python infer_6d_single.py `
 
 ubuntu:
 python infer_6d_single.py \
-  --rgb test_20260523/color_20260523_142307_548_0.png \
-  --d2rgb test_20260523/D2RGB_20260523_142307_548_0.png \
-  --robot-pose  -0.58694 -0.03700 0.59149 -2.097 0.000 1.555 \
+  --rgb test_20260612/20260612_162528_117_color.png \
+  --d2rgb test_20260612/20260612_162528_117_d2rgb.npy \
+  --robot-pose  -0.712547 0.000064 0.581025 -2.279 0.216 1.488 \
   --output-dir ultralytics/runs/plug_6d_single \
-  --window-config configs/window/box_window.yaml \
   --save-overlay \
   --save-base-view \
   --save-ply
 '''
 
 DEFAULT_OUTPUT = ROOT / "ultralytics" / "runs" / "plug_6d_single"
-DEFAULT_HAND_EYE = ROOT / "hand_eye_calibration" / "eye_hand_data" / "calib_20260522" / "hand_eye_result_in-hand.yaml"
+DEFAULT_HAND_EYE = ROOT / "hand_eye_calibration" / "eye_hand_data" / "calib_20260612" / "hand_eye_result_in-hand.yaml"
 DEFAULT_ROBOT_CONFIG = ROOT / "configs" / "robot" / "cs_robot.yaml"
 
 
@@ -239,7 +248,7 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
         write_json(json_path, result)
         return result, json_path
 
-    depth_probe = cv2.imread(str(args.d2rgb), cv2.IMREAD_UNCHANGED)
+    depth_probe = read_depth_raw(args.d2rgb)
     if depth_probe is None:
         result = make_failure(args, "d2rgb_unreadable")
         write_json(json_path, result)

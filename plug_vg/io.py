@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 VIDEO_SUFFIXES = {".mp4", ".avi", ".mov", ".mkv", ".wmv", ".m4v"}
@@ -53,5 +55,26 @@ def first_detection(record: dict[str, Any], key: str) -> dict[str, Any] | None:
         return None
     item = items[0]
     return item if isinstance(item, dict) else None
+
+
+def read_depth_raw(path: Path) -> np.ndarray | None:
+    """Read a D2RGB depth image from PNG or NPY format.
+
+    Returns the raw sensor values as a numpy array (typically uint16), or None
+    if the file cannot be read.
+    """
+    suffix = path.suffix.lower()
+    if suffix == ".npy":
+        try:
+            data = np.load(str(path))
+        except (ValueError, OSError):
+            return None
+        if not isinstance(data, np.ndarray) or data.ndim < 2:
+            return None
+        return data
+    # Default: treat as a standard image (PNG, TIFF, etc.)
+    import cv2
+
+    return cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
 
 
