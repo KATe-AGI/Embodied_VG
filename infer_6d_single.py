@@ -43,8 +43,8 @@ python infer_6d_single.py `
 
 ubuntu:
 python infer_6d_single.py \
-  --rgb test_20260523/color_20260523_112930_755_0.png \
-  --d2rgb test_20260523/D2RGB_20260523_112930_755_0.png \
+  --rgb test_20260523/color_20260523_142307_548_0.png \
+  --d2rgb test_20260523/D2RGB_20260523_142307_548_0.png \
   --robot-pose  -0.58694 -0.03700 0.59149 -2.097 0.000 1.555 \
   --output-dir ultralytics/runs/plug_6d_single \
   --window-config configs/window/box_window.yaml \
@@ -87,7 +87,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-depth", type=float, default=0.1, help="Minimum valid depth in meters.")
     parser.add_argument("--max-depth", type=float, default=1.0, help="Maximum valid depth in meters.")
     parser.add_argument("--min-points", type=int, default=200, help="Minimum filtered mask point count.")
-    parser.add_argument("--keypoint-window", type=int, default=7, help="Odd pixel window size for keypoint depth lookup.")
+    parser.add_argument("--keypoint-window", type=int, default=5, help="Odd pixel window size for keypoint depth lookup.")
     parser.add_argument("--plane-threshold", type=float, default=0.004, help="RANSAC plane inlier threshold in meters.")
     parser.add_argument("--ransac-iters", type=int, default=128, help="RANSAC plane iterations.")
     parser.add_argument("--head-tail-tolerance", type=float, default=0.35, help="Relative tolerance for 3D head-tail distance.")

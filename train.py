@@ -18,19 +18,19 @@ if str(ULTRALYTICS_DIR) not in sys.path:
 from ultralytics import YOLO  # noqa: E402
 
 
-DATASET = ROOT / "plug_dataset_all_20260520" / "yolo_train"
+DATASET = ROOT / "plug_dataset_all_20260529" / "yolo_train"
 DEFAULTS = {
     "segment": {
         "model": ULTRALYTICS_DIR / "yolo26s-seg.pt",
         "data": DATASET / "seg" / "plug_seg.yaml",
         "project": ULTRALYTICS_DIR / "runs" / "segment",
-        "name": "plug_yolo26s_seg_v1",
+        "name": "plug_yolo26s_seg_20260529",
     },
     "pose": {
         "model": ULTRALYTICS_DIR / "yolo26s-pose.pt",
         "data": DATASET / "pose" / "plug_pose.yaml",
         "project": ULTRALYTICS_DIR / "runs" / "pose",
-        "name": "plug_yolo26s_pose_v1",
+        "name": "plug_yolo26s_pose_20260529",
     },
 }
 
@@ -58,7 +58,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--task", choices=("all", "segment", "pose"), default="all", help="Model(s) to train.")
     parser.add_argument("--imgsz", type=int, default=640, help="Training image size.")
-    parser.add_argument("--epochs", type=int, default=20, help="Number of epochs.")
+    parser.add_argument("--epochs", type=int, default=60, help="Number of epochs.")
     parser.add_argument("--batch", type=int, default=32, help="Batch size. Use 4 if GPU memory is insufficient.")
     parser.add_argument("--patience", type=int, default=10, help="Early-stopping patience.")
     parser.add_argument("--workers", type=int, default=8, help="Dataloader workers.")

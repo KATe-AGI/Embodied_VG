@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+'''
+from https://github.com/RealManRobot/hand_eye_calibration
+'''
 """Compute eye-in-hand or eye-to-hand calibration from manually collected data."""
 
 from __future__ import annotations

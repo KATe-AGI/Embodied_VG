@@ -18,11 +18,17 @@ LABEL_TAIL = "plug_tail"
 IMAGE_WIDTH = 1920
 IMAGE_HEIGHT = 1080
 BBOX_MARGIN_RATIO = 0.1
+LABELME_JSON_PATTERNS = ("color_*.json", "undistort_color_*.json")
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--camera-dir", type=Path, default=Path("plug_camera_20260520"), help="Flat camera capture directory.")
+    parser.add_argument(
+        "--camera-dir",
+        type=Path,
+        default=Path("plug_camera_20260520"),
+        help="Optional flat camera capture directory. If it is missing, sibling PNGs beside LabelMe JSON files are used.",
+    )
     parser.add_argument("--annotation-dir", type=Path, default=Path("plug_annotation_20260520"), help="Directory containing one or more LabelMe subdirectories.")
     parser.add_argument(
         "--rgbd-test-dir",
@@ -30,7 +36,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional camera capture directory for 6D test data. Copies color/*.png and D2RGB/*.{png,jpg}.",
     )
-    parser.add_argument("--output", type=Path, default=Path("plug_dataset_20260520"), help="Output dataset root.")
+    parser.add_argument("--output", type=Path, default=Path("plug_dataset_20260529"), help="Output dataset root.")
     parser.add_argument("--train-ratio", type=float, default=0.8, help="MD5 split train ratio in [0, 1].")
     parser.add_argument("--force", action="store_true", help="Remove output directory first if it already exists.")
     return parser.parse_args()
@@ -38,7 +44,10 @@ def parse_args() -> argparse.Namespace:
 
 def raw_id_from_color(path: Path) -> str:
     stem = path.stem
-    return stem.removeprefix("color_") if stem.startswith("color_") else stem
+    for prefix in ("undistort_color_", "color_"):
+        if stem.startswith(prefix):
+            return stem.removeprefix(prefix)
+    return stem
 
 
 def md5_split(raw_id: str, train_ratio: float) -> str:
@@ -64,6 +73,8 @@ def fmt(value: float) -> str:
 
 def find_camera_files(camera_dir: Path) -> dict[str, dict[str, Path]]:
     files: dict[str, dict[str, Path]] = {}
+    if not camera_dir.is_dir():
+        return files
     prefixes = {
         "color": "color_png",
         "D2RGB": "D2RGB",
@@ -102,12 +113,13 @@ def find_camera_files(camera_dir: Path) -> dict[str, dict[str, Path]]:
 def collect_labelme(annotation_dir: Path) -> dict[str, Path]:
     found: dict[str, Path] = {}
     duplicates: list[str] = []
-    for path in sorted(annotation_dir.rglob("color_*.json")):
-        raw_id = raw_id_from_color(path)
-        if raw_id in found:
-            duplicates.append(raw_id)
-            continue
-        found[raw_id] = path
+    for pattern in LABELME_JSON_PATTERNS:
+        for path in sorted(annotation_dir.rglob(pattern)):
+            raw_id = raw_id_from_color(path)
+            if raw_id in found:
+                duplicates.append(raw_id)
+                continue
+            found[raw_id] = path
     if duplicates:
         names = ", ".join(sorted(set(duplicates))[:10])
         raise ValueError(f"Duplicate LabelMe annotations for raw_id(s): {names}")
@@ -272,6 +284,7 @@ def convert(args: argparse.Namespace) -> None:
             raise FileExistsError(f"Output already exists: {args.output}. Use --force to overwrite.")
         shutil.rmtree(args.output)
 
+    camera_dir_used = args.camera_dir if args.camera_dir.is_dir() else None
     camera_files = find_camera_files(args.camera_dir)
     annotations = collect_labelme(args.annotation_dir)
 
@@ -303,7 +316,8 @@ def convert(args: argparse.Namespace) -> None:
         split = md5_split(raw_id, args.train_ratio)
         color_name = f"color_{raw_id}.png"
         label_name = f"color_{raw_id}.txt"
-        color_src = camera_files.get(raw_id, {}).get("color_png") or label_path.with_suffix(".png")
+        camera_entry = camera_files.get(raw_id, {})
+        color_src = camera_entry.get("color_png") or camera_entry.get("undistort_color_png") or label_path.with_suffix(".png")
         if not color_src.exists():
             raise FileNotFoundError(f"Missing color image for {raw_id}: {color_src}")
 
@@ -467,7 +481,7 @@ def convert(args: argparse.Namespace) -> None:
     info = {
         "dataset_name": args.output.name,
         "source": {
-            "camera_dir": str(args.camera_dir),
+            "camera_dir": None if camera_dir_used is None else str(camera_dir_used),
             "annotation_dir": str(args.annotation_dir),
             "rgbd_test_dir": None if args.rgbd_test_dir is None else str(args.rgbd_test_dir),
         },

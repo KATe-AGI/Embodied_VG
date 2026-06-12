@@ -58,7 +58,7 @@ T_end_camera
 Run:
 
 ```bash
-python compute_hand_eye.py --mode in-hand --data-dir eye_hand_data/calib_20260522
+python compute_hand_eye.py --mode in-hand --data-dir eye_hand_data/calib_20260527
 ```
 
 ### Eye-To-Hand

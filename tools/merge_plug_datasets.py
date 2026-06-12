@@ -140,24 +140,47 @@ def copy_glob(inputs: list[Path], relative_glob: str, output: Path) -> tuple[int
     return copied, skipped
 
 
-def merge_yolo_train(inputs: list[Path], output: Path) -> dict[str, Any]:
+def copy_yolo_manifest_files(inputs: list[Path], output: Path) -> tuple[Counter, Counter]:
+    """Copy only YOLO files referenced by each input frame_manifest.csv."""
     copied = Counter()
     skipped = Counter()
-    patterns = {
-        "standard_annotations": "yolo_train/annotations_standard/*.standard.json",
-        "seg_train_images": "yolo_train/seg/images/train/*.png",
-        "seg_val_images": "yolo_train/seg/images/val/*.png",
-        "seg_train_labels": "yolo_train/seg/labels/train/*.txt",
-        "seg_val_labels": "yolo_train/seg/labels/val/*.txt",
-        "pose_train_images": "yolo_train/pose/images/train/*.png",
-        "pose_val_images": "yolo_train/pose/images/val/*.png",
-        "pose_train_labels": "yolo_train/pose/labels/train/*.txt",
-        "pose_val_labels": "yolo_train/pose/labels/val/*.txt",
+    fields = {
+        "standard_annotation": "standard_annotations",
+        "seg_image": "seg_{split}_images",
+        "seg_label": "seg_{split}_labels",
+        "pose_image": "pose_{split}_images",
+        "pose_label": "pose_{split}_labels",
     }
-    for name, pattern in patterns.items():
-        c, s = copy_glob(inputs, pattern, output)
-        copied[name] += c
-        skipped[name] += s
+
+    for dataset in inputs:
+        yolo_root = dataset / "yolo_train"
+        manifest = yolo_root / "meta" / "frame_manifest.csv"
+        if not manifest.exists():
+            raise FileNotFoundError(f"Input dataset is missing yolo_train frame manifest: {manifest}")
+        _, rows = read_csv(manifest)
+        for row in rows:
+            split = row.get("split", "")
+            for field, count_name_template in fields.items():
+                rel_value = row.get(field, "")
+                if not rel_value:
+                    continue
+                rel_path = Path(rel_value)
+                if rel_path.is_absolute() or ".." in rel_path.parts:
+                    raise ValueError(f"Unsafe {field} path in {manifest}: {rel_value}")
+                src = yolo_root / rel_path
+                if not src.is_file():
+                    raise FileNotFoundError(f"Manifest references missing file: {src}")
+                dst = output / "yolo_train" / rel_path
+                count_name = count_name_template.format(split=split)
+                if copy_checked(src, dst):
+                    copied[count_name] += 1
+                else:
+                    skipped[count_name] += 1
+    return copied, skipped
+
+
+def merge_yolo_train(inputs: list[Path], output: Path) -> dict[str, Any]:
+    copied, skipped = copy_yolo_manifest_files(inputs, output)
 
     write_yolo_yaml(output)
     meta_inputs = [dataset / "yolo_train" / "meta" for dataset in inputs]
