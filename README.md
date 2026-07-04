@@ -78,20 +78,20 @@ python infer_6d_single.py \
   --robot-pose 0.42 -0.18 0.63 0.3 -0.2 0.5 \
   --output-dir ultralytics/runs/plug_6d_single \
   --window-config configs/window/box_window.yaml \
+  --window-grid 3x4 \
   --save-overlay
 ```
 
-Window geometry is optional. Provide either `--window-config` or `--window-corners-base` to enable window-constrained candidate generation. If neither is provided, the final grasp pose is the direct visual base-frame pose.
+Window geometry is optional. Provide either `--window-config` or `--window-corners-base` to enable window-constrained candidate generation. Use `--window-grid ROWSxCOLS` to split the inward-margin window into cell centers, for example `3x4`, `3,4`, or `(3,4)`. If neither window input is provided, the final grasp pose is the direct visual base-frame pose.
 
 The output JSON contains:
 
 - `grasp_solution_mode`: `direct_visual` without window geometry, or `window_constrained` when window geometry is enabled.
 - `grasp_pose_camera`: visual 6D estimate in the RGB camera frame.
 - `grasp_pose_base`: the visual estimate transformed to robot base frame. In direct-visual mode this is the final grasp pose; in window-constrained mode it is a `surface_normal_reference`.
-- `window_constrained_grasp_candidates`: sorted base-frame grasp poses constrained by the window geometry; present only in window-constrained mode.
-- `best_grasp_pose_base`: the first window candidate and the downstream grasp pose to consume; present only in window-constrained mode.
-- `grasp_point_base_m`: final grasp point `(x, y, z)` in the robot base frame. It is estimated from a mask-and-axis fused surface anchor, then offset to the midsection volume center.
-- `tail_to_head_axis_base`: virtual tail/head endpoints on the plug `tail -> head` axis. The axis uses the visual reference pose `+X`, is centered on `grasp_point_base_m`, and uses the configured plug head-tail distance.
+- `window_constrained_grasp_candidates`: base-frame grasp pose collection constrained by the window geometry; present only in window-constrained mode. Candidates are emitted in sampling order, not score order.
+- `grasp_point_base_m`: direct-visual final grasp point `(x, y, z)` in the robot base frame; present only in direct-visual mode. Window-constrained mode stores this field per candidate.
+- `tail_to_head_axis_base`: virtual tail/head endpoints on the plug `tail -> head` axis; present at top level only in direct-visual mode and per candidate in window-constrained mode.
 - `quality.grasp_center_estimation`: diagnostics for the fused 2D anchor, depth outlier rejection, surface center, half-thickness center offset, and optional `--grasp-axis-offset-m` adjustment.
 
-In direct-visual mode, the grasp frame is the original visual grasp coordinate system. In window-constrained mode, `best_grasp_pose_base` uses the selected window approach frame while `tail_to_head_axis_base` still describes the plug body's visual `tail -> head` direction.
+In direct-visual mode, the grasp frame is the original visual grasp coordinate system. In window-constrained mode, no single best pose is selected; downstream consumers should choose from `window_constrained_grasp_candidates`. Each candidate uses a window approach frame while its `tail_to_head_axis_base` still describes the plug body's visual `tail -> head` direction.

@@ -19,6 +19,8 @@ from plug_vg.io import raw_id_from_image, read_depth_raw, write_json
 from plug_vg.robot_transform import convert_camera_grasp_to_base, load_hand_eye_matrix, robot_pose_to_matrix
 from plug_vg.vision import draw_overlay as draw_stage1_overlay, run_models
 from plug_vg.window_grasp import (
+    DEFAULT_GRID_COLS,
+    DEFAULT_GRID_ROWS,
     DEFAULT_MARGIN_M,
     WindowGraspError,
     add_window_candidates,
@@ -34,8 +36,8 @@ r'''
 windows:
 不带窗口约束（默认）
 python infer_6d_single.py `
-  --rgb test_20260612/20260612_162528_117_color.png `
-  --d2rgb test_20260612/20260612_162528_117_d2rgb.npy `
+  --rgb test_20260618/20260618_165012_536_color.png `
+  --d2rgb test_20260618/20260618_165012_536_d2rgb.npy `
   --robot-pose  -0.712547 0.000064 0.581025 -2.279 0.216 1.488 `
   --output-dir ultralytics/runs/plug_6d_single `
   --window-config configs/window/box_window.yaml `
@@ -52,19 +54,49 @@ python infer_6d_single.py `
 
 
 ubuntu:
+不带窗口约束（默认）
 python infer_6d_single.py \
-  --rgb test_20260612/20260612_162528_117_color.png \
-  --d2rgb test_20260612/20260612_162528_117_d2rgb.npy \
+  --rgb test_20260618/20260618_165012_536_color.png \
+  --d2rgb test_20260618/20260618_165012_536_d2rgb.npy \
   --robot-pose  -0.712547 0.000064 0.581025 -2.279 0.216 1.488 \
   --output-dir ultralytics/runs/plug_6d_single \
   --save-overlay \
   --save-base-view \
   --save-ply
+
+
+带窗口约束
+python infer_6d_single.py \
+  --rgb test_20260618/20260618_165012_536_color.png \
+  --d2rgb test_20260618/20260618_165012_536_d2rgb.npy \
+  --robot-pose -0.712547 0.000064 0.581025 -2.279 0.216 1.488 \
+  --output-dir ultralytics/runs/plug_6d_infer_window1 \
+  --save-overlay \
+  --window-config configs/window/box_window.yaml \
+  --window-grid 3x3 \
+  --save-base-view
 '''
 
-DEFAULT_OUTPUT = ROOT / "ultralytics" / "runs" / "plug_6d_single"
-DEFAULT_HAND_EYE = ROOT / "hand_eye_calibration" / "eye_hand_data" / "calib_20260612" / "hand_eye_result_in-hand.yaml"
+DEFAULT_OUTPUT = ROOT / "ultralytics" / "runs" / "plug_6d_infer_window1"
+DEFAULT_HAND_EYE = ROOT / "hand_eye_calibration" / "eye_hand_data" / "calib_20260618" / "hand_eye_result_in-hand.yaml"
 DEFAULT_ROBOT_CONFIG = ROOT / "configs" / "robot" / "cs_robot.yaml"
+
+
+def parse_window_grid(value: str) -> tuple[int, int]:
+    normalized = value.strip().lower()
+    for char in "()[]":
+        normalized = normalized.replace(char, "")
+    normalized = normalized.replace("×", "x").replace("*", "x").replace(",", "x")
+    parts = [part.strip() for part in normalized.split("x") if part.strip()]
+    if len(parts) != 2:
+        raise argparse.ArgumentTypeError("window grid must be ROWSxCOLS, for example 3x4, 3,4, or (3,4)")
+    try:
+        rows, cols = (int(parts[0]), int(parts[1]))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("window grid rows and cols must be integers") from exc
+    if rows <= 0 or cols <= 0:
+        raise argparse.ArgumentTypeError("window grid rows and cols must be positive integers")
+    return rows, cols
 
 
 def parse_args() -> argparse.Namespace:
@@ -121,6 +153,13 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=f"Window inward sampling margin in meters. Defaults to YAML margin_m or {DEFAULT_MARGIN_M}.",
     )
+    parser.add_argument(
+        "--window-grid",
+        type=parse_window_grid,
+        default=(DEFAULT_GRID_ROWS, DEFAULT_GRID_COLS),
+        metavar="ROWSxCOLS",
+        help="Window candidate grid as ROWSxCOLS, e.g. 3x4, 3,4, or (3,4). Defaults to 3x3.",
+    )
     return parser.parse_args()
 
 
@@ -136,8 +175,14 @@ def margin_ignored_without_window(args: argparse.Namespace) -> bool:
     return args.window_margin_m is not None and not window_constraint_requested(args)
 
 
+def window_grid_shape(args: argparse.Namespace) -> tuple[int, int]:
+    rows, cols = args.window_grid
+    return int(rows), int(cols)
+
+
 def make_failure(args: argparse.Namespace, reason: str, warnings: list[str] | None = None) -> dict[str, Any]:
     all_warnings = list(warnings or [])
+    grid_rows, grid_cols = window_grid_shape(args)
     if margin_ignored_without_window(args):
         all_warnings.append("window_margin_ignored_without_window_geometry")
     return {
@@ -153,6 +198,8 @@ def make_failure(args: argparse.Namespace, reason: str, warnings: list[str] | No
             "window_corners_base_provided": args.window_corners_base is not None,
             "window_constraint_enabled": window_constraint_requested(args),
             "window_margin_m": None if args.window_margin_m is None else float(args.window_margin_m),
+            "window_grid_rows": grid_rows,
+            "window_grid_cols": grid_cols,
         },
     }
 
@@ -173,21 +220,17 @@ def print_result(result: dict[str, Any], output_path: Path) -> None:
     print(f"status: {result.get('status')}")
     if result.get("status") == "ok":
         print(f"grasp_solution_mode: {result.get('grasp_solution_mode')}")
-        best_pose = result.get("best_grasp_pose_base")
-        if isinstance(best_pose, dict):
-            candidates = result.get("window_constrained_grasp_candidates") or []
+        candidates = result.get("window_constrained_grasp_candidates")
+        if isinstance(candidates, list):
             print(f"window_constrained_grasp_candidates.count: {len(candidates)}")
-            print(f"best_grasp_pose_base.xyzrpy_m_rad: {best_pose.get('xyzrpy_m_rad')}")
-            print(f"best_grasp_pose_base.xyzrpy_m_deg: {best_pose.get('xyzrpy_m_deg')}")
-            print(f"best_grasp_pose_base.score_visual_geometry: {best_pose.get('score_visual_geometry')}")
         else:
             grasp_pose_base = result.get("grasp_pose_base") or {}
             print(f"grasp_pose_base.robot_pose_xyzrpy_m_rad: {grasp_pose_base.get('robot_pose_xyzrpy_m_rad')}")
             print(f"grasp_pose_base.robot_pose_xyzrpy_m_deg: {grasp_pose_base.get('robot_pose_xyzrpy_m_deg')}")
-        axis = result.get("tail_to_head_axis_base") or {}
-        print(f"grasp_point_base_m: {result.get('grasp_point_base_m')}")
-        print(f"tail_to_head_axis_base.tail_point_m: {axis.get('tail_point_m')}")
-        print(f"tail_to_head_axis_base.head_point_m: {axis.get('head_point_m')}")
+            axis = result.get("tail_to_head_axis_base") or {}
+            print(f"grasp_point_base_m: {result.get('grasp_point_base_m')}")
+            print(f"tail_to_head_axis_base.tail_point_m: {axis.get('tail_point_m')}")
+            print(f"tail_to_head_axis_base.head_point_m: {axis.get('head_point_m')}")
         print(f"grasp_pose_base.role: {result.get('grasp_pose_base_role')}")
         warnings = result.get("warnings") or []
         if warnings:
@@ -221,11 +264,12 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
     json_path = output_json_path(args.output_dir, args.rgb)
     args.dataset = args.d2rgb.parent.parent
     window_requested = window_constraint_requested(args)
+    grid_rows, grid_cols = window_grid_shape(args)
 
     if window_requested:
         try:
             window_inputs = resolve_window_inputs(args.window_config, args.window_corners_base, args.window_margin_m)
-            build_window_geometry(window_inputs.corners, window_inputs.margin_m)
+            build_window_geometry(window_inputs.corners, window_inputs.margin_m, grid_rows, grid_cols)
         except WindowGraspError as exc:
             result = make_failure(args, exc.reason, [str(exc)])
             if exc.details:
@@ -287,7 +331,14 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
         )
         if window_requested:
             try:
-                result = add_window_candidates(result, args.window_config, args.window_corners_base, args.window_margin_m)
+                result = add_window_candidates(
+                    result,
+                    args.window_config,
+                    args.window_corners_base,
+                    args.window_margin_m,
+                    grid_rows,
+                    grid_cols,
+                )
             except WindowGraspError as exc:
                 result["status"] = "failed"
                 result["reason"] = exc.reason
@@ -333,6 +384,8 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
             "window_corners_base_provided": args.window_corners_base is not None,
             "window_constraint_enabled": window_requested,
             "window_margin_m": None if args.window_margin_m is None else float(args.window_margin_m),
+            "window_grid_rows": grid_rows,
+            "window_grid_cols": grid_cols,
         }
     )
     if margin_ignored_without_window(args):

@@ -85,6 +85,7 @@ def build_window_view_data(result: dict[str, Any]) -> dict[str, Any] | None:
     effective_width = window.get("effective_width_m")
     effective_height = window.get("effective_height_m")
     effective_corners = None
+    grid_lines = []
     if center is not None and x_axis is not None and y_axis is not None and effective_width is not None and effective_height is not None:
         ex = float(effective_width) * 0.5
         ey = float(effective_height) * 0.5
@@ -94,6 +95,23 @@ def build_window_view_data(result: dict[str, Any]) -> dict[str, Any] | None:
             [center[i] + x_axis[i] * ex + y_axis[i] * ey for i in range(3)],
             [center[i] - x_axis[i] * ex + y_axis[i] * ey for i in range(3)],
         ]
+        sampling = window.get("sampling") or {}
+        try:
+            grid_rows = int(sampling.get("grid_rows", 0))
+            grid_cols = int(sampling.get("grid_cols", 0))
+        except (TypeError, ValueError):
+            grid_rows = 0
+            grid_cols = 0
+        for col in range(1, grid_cols):
+            x_fraction = -0.5 + float(col) / float(grid_cols)
+            start = [center[i] + x_axis[i] * x_fraction * float(effective_width) - y_axis[i] * ey for i in range(3)]
+            end = [center[i] + x_axis[i] * x_fraction * float(effective_width) + y_axis[i] * ey for i in range(3)]
+            grid_lines.append({"axis": "col", "index": col, "start": start, "end": end})
+        for row in range(1, grid_rows):
+            y_fraction = -0.5 + float(row) / float(grid_rows)
+            start = [center[i] - x_axis[i] * ex + y_axis[i] * y_fraction * float(effective_height) for i in range(3)]
+            end = [center[i] + x_axis[i] * ex + y_axis[i] * y_fraction * float(effective_height) for i in range(3)]
+            grid_lines.append({"axis": "row", "index": row, "start": start, "end": end})
 
     candidates = []
     raw_candidates = result.get("window_constrained_grasp_candidates") or []
@@ -108,6 +126,9 @@ def build_window_view_data(result: dict[str, Any]) -> dict[str, Any] | None:
             candidates.append(
                 {
                     "index": item.get("index"),
+                    "grid_row": item.get("grid_row"),
+                    "grid_col": item.get("grid_col"),
+                    "sample_type": item.get("sample_type"),
                     "window_point": point,
                     "z_approach": z_axis,
                     "score": item.get("score_visual_geometry"),
@@ -125,6 +146,8 @@ def build_window_view_data(result: dict[str, Any]) -> dict[str, Any] | None:
         "margin": window.get("margin_m"),
         "effective_width": effective_width,
         "effective_height": effective_height,
+        "sampling": window.get("sampling") or {},
+        "grid_lines": grid_lines,
         "candidates": candidates,
         "candidate_stats": result.get("window_candidate_stats") or {},
     }
@@ -362,14 +385,16 @@ function fillPanel() {{
   if (data.window) {{
     const stats = data.window.candidate_stats || {{}};
     const candidates = data.window.candidates || [];
-    const best = candidates.length ? candidates[0] : null;
+    const sampling = data.window.sampling || {{}};
+    const grid = sampling.grid_rows && sampling.grid_cols ? `${{sampling.grid_rows}} x ${{sampling.grid_cols}}` : "n/a";
     windowEl.innerHTML = [
       row("source", data.window.source || "n/a"),
       row("size m", `${{fmt(data.window.width, 4)}} x ${{fmt(data.window.height, 4)}}`),
       row("effective", `${{fmt(data.window.effective_width, 4)}} x ${{fmt(data.window.effective_height, 4)}}`),
       row("margin", fmt(data.window.margin, 4)),
-      row("candidates", `${{stats.kept_count ?? candidates.length}} / ${{stats.sampled_count ?? "n/a"}}`),
-      row("best score", best ? fmt(best.score, 4) : "n/a")
+      row("sampling", sampling.mode || "n/a"),
+      row("grid", grid),
+      row("candidates", `${{stats.kept_count ?? candidates.length}} / ${{stats.sampled_count ?? "n/a"}}`)
     ].join("");
   }} else {{
     windowEl.innerHTML = row("window", "not available");
@@ -619,6 +644,16 @@ function drawWindowAndCone(focus, scale) {{
   faces.sort((a, b) => faceDepth(a.points, focus) - faceDepth(b.points, focus));
   for (const face of faces) {{
     drawPolygon(face.points, focus, scale, face.fill, face.stroke, face.width);
+  }}
+
+  const gridLines = data.window.grid_lines || [];
+  for (const line of gridLines) {{
+    drawPlainLine(
+      project(line.start, focus, scale),
+      project(line.end, focus, scale),
+      "rgba(2, 132, 199, 0.72)",
+      1.2
+    );
   }}
 
   const centerPx = project(center, focus, scale);

@@ -15,7 +15,8 @@ from .robot_transform import rotation_to_rpy_xyz, round_list
 
 CORNER_ORDER = "left_top_right_top_right_bottom_left_bottom"
 DEFAULT_MARGIN_M = 0.02
-DEFAULT_GRID_SIZE = 3
+DEFAULT_GRID_ROWS = 3
+DEFAULT_GRID_COLS = 3
 MIN_EDGE_M = 1e-4
 PLANAR_TOLERANCE_M = 0.005
 MIN_AXIS_CROSS_NORM = 0.1
@@ -128,8 +129,25 @@ def resolve_window_inputs(
     return WindowInputs(corners=corners, margin_m=margin_m, source=source)
 
 
-def build_window_geometry(corners: np.ndarray, margin_m: float, grid_size: int = DEFAULT_GRID_SIZE) -> dict[str, Any]:
+def _validate_grid_shape(grid_rows: int, grid_cols: int) -> tuple[int, int]:
+    try:
+        rows = int(grid_rows)
+        cols = int(grid_cols)
+    except (TypeError, ValueError) as exc:
+        raise WindowGraspError("window_geometry_invalid", "Window grid rows and cols must be integers.") from exc
+    if rows <= 0 or cols <= 0:
+        raise WindowGraspError("window_geometry_invalid", "Window grid rows and cols must be positive integers.")
+    return rows, cols
+
+
+def build_window_geometry(
+    corners: np.ndarray,
+    margin_m: float,
+    grid_rows: int = DEFAULT_GRID_ROWS,
+    grid_cols: int = DEFAULT_GRID_COLS,
+) -> dict[str, Any]:
     corners = _as_corners(corners, "geometry")
+    grid_rows, grid_cols = _validate_grid_shape(grid_rows, grid_cols)
     w1, w2, w3, w4 = corners
     edge_top = w2 - w1
     edge_bottom = w3 - w4
@@ -190,8 +208,11 @@ def build_window_geometry(corners: np.ndarray, margin_m: float, grid_size: int =
         "effective_width_m": round(float(effective_width), 8),
         "effective_height_m": round(float(effective_height), 8),
         "sampling": {
-            "mode": f"{int(grid_size)}x{int(grid_size)}_grid",
-            "grid_size": int(grid_size),
+            "mode": "cell_centers_plus_window_center",
+            "grid_rows": int(grid_rows),
+            "grid_cols": int(grid_cols),
+            "includes_window_center": True,
+            "deduplicate_center": True,
         },
         "_numeric": {
             "center": center,
@@ -208,28 +229,30 @@ def public_window_geometry(geometry: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in geometry.items() if key != "_numeric"}
 
 
-def _sample_window_points(geometry: dict[str, Any]) -> list[tuple[int, int, np.ndarray, float]]:
+def _sample_window_points(geometry: dict[str, Any]) -> list[tuple[int | None, int | None, str, np.ndarray]]:
     numeric = geometry["_numeric"]
-    grid_size = int(geometry["sampling"]["grid_size"])
+    grid_rows = int(geometry["sampling"]["grid_rows"])
+    grid_cols = int(geometry["sampling"]["grid_cols"])
     center = numeric["center"]
     x_axis = numeric["x_axis"]
     y_axis = numeric["y_axis"]
     effective_width = float(numeric["effective_width"])
     effective_height = float(numeric["effective_height"])
-    if grid_size <= 1:
-        offsets = [0.0]
-    else:
-        offsets = np.linspace(-0.5, 0.5, grid_size)
 
-    points: list[tuple[int, int, np.ndarray, float]] = []
-    half_diagonal = float(np.hypot(effective_width * 0.5, effective_height * 0.5))
-    for row, y_fraction in enumerate(offsets):
-        for col, x_fraction in enumerate(offsets):
+    points: list[tuple[int | None, int | None, str, np.ndarray]] = []
+    has_window_center = False
+    for row in range(grid_rows):
+        y_fraction = -0.5 + (float(row) + 0.5) / float(grid_rows)
+        for col in range(grid_cols):
+            x_fraction = -0.5 + (float(col) + 0.5) / float(grid_cols)
             dx = float(x_fraction) * effective_width
             dy = float(y_fraction) * effective_height
             point = center + x_axis * dx + y_axis * dy
-            distance_norm = 0.0 if half_diagonal < 1e-9 else min(1.0, float(np.hypot(dx, dy)) / half_diagonal)
-            points.append((row, col, point, distance_norm))
+            if np.linalg.norm(point - center) < 1e-9:
+                has_window_center = True
+            points.append((row, col, "grid_cell_center", point))
+    if not has_window_center:
+        points.append((None, None, "window_center", center))
     return points
 
 
@@ -311,7 +334,7 @@ def generate_window_constrained_candidates(
     grasp_pose_base: dict[str, Any],
     window_geometry: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Generate sorted grasp pose candidates constrained by a window."""
+    """Generate grasp pose candidates constrained by a window in sampling order."""
 
     translation = np.asarray(grasp_pose_base.get("translation_m"), dtype=np.float64)
     rotation_reference = np.asarray(grasp_pose_base.get("rotation_matrix"), dtype=np.float64)
@@ -325,66 +348,103 @@ def generate_window_constrained_candidates(
     window_normal = np.asarray(window_geometry["_numeric"]["normal"], dtype=np.float64)
     candidates: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
-    for index, (row, col, point, distance_norm) in enumerate(_sample_window_points(window_geometry)):
+    for index, (row, col, sample_type, point) in enumerate(_sample_window_points(window_geometry)):
         approach = normalize(translation - point)
-        filter_info: dict[str, Any] = {"grid_row": row, "grid_col": col, "status": "kept"}
+        filter_info: dict[str, Any] = {"status": "kept"}
         if approach is None:
             filter_info.update({"status": "rejected", "reason": "window_point_equals_grasp_center"})
-            rejected.append({"index": index, "filter_info": filter_info})
+            rejected.append(
+                {
+                    "index": index,
+                    "grid_row": row,
+                    "grid_col": col,
+                    "sample_type": sample_type,
+                    "window_point_base": round_list(point),
+                    "filter_info": filter_info,
+                }
+            )
             continue
 
         normal_alignment = abs(float(np.dot(approach, window_normal)))
         axis_projected = a_base - float(np.dot(a_base, approach)) * approach
         axis_projection_norm = float(np.linalg.norm(axis_projected))
-        filter_info.update(
-            {
-                "window_normal_alignment_abs": round(normal_alignment, 8),
-                "axis_projection_norm": round(axis_projection_norm, 8),
-            }
-        )
+        diagnostics = {
+            "window_normal_alignment_abs": round(normal_alignment, 8),
+            "axis_projection_norm": round(axis_projection_norm, 8),
+        }
+        filter_info.update(diagnostics)
         if normal_alignment < MIN_WINDOW_NORMAL_ALIGNMENT:
             filter_info.update({"status": "rejected", "reason": "approach_parallel_to_window_plane"})
-            rejected.append({"index": index, "window_point_base": round_list(point), "filter_info": filter_info})
+            rejected.append(
+                {
+                    "index": index,
+                    "grid_row": row,
+                    "grid_col": col,
+                    "sample_type": sample_type,
+                    "window_point_base": round_list(point),
+                    "filter_info": filter_info,
+                }
+            )
             continue
         if axis_projection_norm < MIN_AXIS_PROJECTION_NORM:
             filter_info.update({"status": "rejected", "reason": "tail_head_axis_parallel_to_approach"})
-            rejected.append({"index": index, "window_point_base": round_list(point), "filter_info": filter_info})
+            rejected.append(
+                {
+                    "index": index,
+                    "grid_row": row,
+                    "grid_col": col,
+                    "sample_type": sample_type,
+                    "window_point_base": round_list(point),
+                    "filter_info": filter_info,
+                }
+            )
             continue
 
         x_axis = axis_projected / axis_projection_norm
         y_axis = normalize(np.cross(approach, x_axis))
         if y_axis is None:
             filter_info.update({"status": "rejected", "reason": "y_axis_degenerate"})
-            rejected.append({"index": index, "window_point_base": round_list(point), "filter_info": filter_info})
+            rejected.append(
+                {
+                    "index": index,
+                    "grid_row": row,
+                    "grid_col": col,
+                    "sample_type": sample_type,
+                    "window_point_base": round_list(point),
+                    "filter_info": filter_info,
+                }
+            )
             continue
         z_axis = normalize(np.cross(x_axis, y_axis))
         if z_axis is None:
             filter_info.update({"status": "rejected", "reason": "z_axis_degenerate"})
-            rejected.append({"index": index, "window_point_base": round_list(point), "filter_info": filter_info})
+            rejected.append(
+                {
+                    "index": index,
+                    "grid_row": row,
+                    "grid_col": col,
+                    "sample_type": sample_type,
+                    "window_point_base": round_list(point),
+                    "filter_info": filter_info,
+                }
+            )
             continue
 
         rotation = np.column_stack([x_axis, y_axis, z_axis]).astype(np.float64)
-        center_score = max(0.0, 1.0 - float(distance_norm))
-        axis_stability_score = min(1.0, max(0.0, axis_projection_norm))
-        score = 0.7 * center_score + 0.3 * axis_stability_score
         candidate = {
             "index": int(index),
+            "grid_row": row,
+            "grid_col": col,
+            "sample_type": sample_type,
             "window_point_base": round_list(point),
             "z_approach_base": round_list(z_axis),
             "x_grasp_base": round_list(x_axis),
             "y_grasp_base": round_list(y_axis),
-            "score_visual_geometry": round(float(score), 6),
-            "filter_info": {
-                **filter_info,
-                "center_distance_normalized": round(float(distance_norm), 8),
-                "center_score": round(float(center_score), 8),
-                "axis_stability_score": round(float(axis_stability_score), 8),
-            },
+            "filter_info": diagnostics,
             **_candidate_pose(rotation, translation, a_base),
         }
         candidates.append(candidate)
 
-    candidates.sort(key=lambda item: (-float(item["score_visual_geometry"]), int(item["index"])))
     stats = {
         "sampled_count": int(len(candidates) + len(rejected)),
         "kept_count": int(len(candidates)),
@@ -403,11 +463,13 @@ def add_window_candidates(
     config_path: Path | None,
     corners_override: list[float] | tuple[float, ...] | None,
     margin_override: float | None,
+    grid_rows: int = DEFAULT_GRID_ROWS,
+    grid_cols: int = DEFAULT_GRID_COLS,
 ) -> dict[str, Any]:
     """Attach window geometry and constrained candidates to an OK base-frame result."""
 
     inputs = resolve_window_inputs(config_path, corners_override, margin_override)
-    geometry = build_window_geometry(inputs.corners, inputs.margin_m)
+    geometry = build_window_geometry(inputs.corners, inputs.margin_m, grid_rows, grid_cols)
     candidates, stats = generate_window_constrained_candidates(result["grasp_pose_base"], geometry)
     result["grasp_solution_mode"] = "window_constrained"
     result["grasp_pose_base_role"] = "surface_normal_reference"
@@ -415,22 +477,20 @@ def add_window_candidates(
     result["window_geometry_base"]["source"] = inputs.source
     result["window_candidate_stats"] = stats
     result["window_constrained_grasp_candidates"] = candidates
+    result.pop("best_grasp_pose_base", None)
+    result.pop("grasp_point_base_m", None)
+    result.pop("tail_to_head_axis_base", None)
     if not candidates:
-        result.pop("best_grasp_pose_base", None)
-        result.pop("grasp_point_base_m", None)
-        result.pop("tail_to_head_axis_base", None)
         result["status"] = "failed"
         result["reason"] = "window_candidate_generation_failed"
         warnings = result.setdefault("warnings", [])
         warnings.append("window_candidate_generation_failed_no_candidates_after_filtering")
-    else:
-        result["best_grasp_pose_base"] = dict(candidates[0])
-        result["grasp_point_base_m"] = result["best_grasp_pose_base"]["grasp_point_base_m"]
-        result["tail_to_head_axis_base"] = result["best_grasp_pose_base"]["tail_to_head_axis_base"]
     return result
 
 
 __all__ = [
+    "DEFAULT_GRID_COLS",
+    "DEFAULT_GRID_ROWS",
     "DEFAULT_MARGIN_M",
     "WindowGraspError",
     "add_window_candidates",

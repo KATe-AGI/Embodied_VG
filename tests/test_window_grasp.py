@@ -64,16 +64,21 @@ class WindowGraspTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.reason, "window_geometry_invalid")
 
-    def test_generate_3x3_candidates_sorted_and_orthonormal(self) -> None:
+    def test_generate_3x3_cell_center_candidates_deduplicate_window_center(self) -> None:
         geometry = build_window_geometry(self.corners, margin_m=0.1)
         candidates, stats = generate_window_constrained_candidates(self.reference_pose, geometry)
 
         self.assertEqual(stats["sampled_count"], 9)
         self.assertEqual(len(candidates), 9)
-        self.assertEqual(candidates[0]["window_point_base"], [0.0, 0.0, 0.0])
-        self.assertEqual(candidates[0]["score_visual_geometry"], 1.0)
-        scores = [candidate["score_visual_geometry"] for candidate in candidates]
-        self.assertEqual(scores, sorted(scores, reverse=True))
+        self.assertEqual(candidates[4]["window_point_base"], [0.0, 0.0, 0.0])
+        self.assertEqual(candidates[4]["sample_type"], "grid_cell_center")
+        self.assertNotIn("score_visual_geometry", candidates[0])
+        self.assertNotIn("center_score", candidates[0]["filter_info"])
+        self.assertNotIn("axis_stability_score", candidates[0]["filter_info"])
+        self.assertEqual(
+            [(candidate["grid_row"], candidate["grid_col"]) for candidate in candidates],
+            [(row, col) for row in range(3) for col in range(3)],
+        )
 
         for candidate in candidates:
             rotation = np.asarray(candidate["rotation_matrix"], dtype=np.float64)
@@ -89,6 +94,20 @@ class WindowGraspTests(unittest.TestCase):
             np.testing.assert_allclose(candidate["x_grasp_base"], x_axis, atol=1e-7)
             np.testing.assert_allclose(candidate["y_grasp_base"], y_axis, atol=1e-7)
             np.testing.assert_allclose(candidate["z_approach_base"], z_axis, atol=1e-7)
+
+    def test_generate_3x4_candidates_adds_window_center(self) -> None:
+        geometry = build_window_geometry(self.corners, margin_m=0.1, grid_rows=3, grid_cols=4)
+        candidates, stats = generate_window_constrained_candidates(self.reference_pose, geometry)
+
+        self.assertEqual(stats["sampled_count"], 13)
+        self.assertEqual(len(candidates), 13)
+        self.assertEqual(candidates[-1]["sample_type"], "window_center")
+        self.assertIsNone(candidates[-1]["grid_row"])
+        self.assertIsNone(candidates[-1]["grid_col"])
+        self.assertEqual(candidates[-1]["window_point_base"], [0.0, 0.0, 0.0])
+        self.assertEqual(candidates[0]["sample_type"], "grid_cell_center")
+        self.assertEqual(candidates[0]["grid_row"], 0)
+        self.assertEqual(candidates[0]["grid_col"], 0)
 
     def test_cli_corners_override_yaml_corners(self) -> None:
         override = [float(value) for value in self.corners.reshape(-1)]
@@ -150,7 +169,7 @@ class WindowGraspTests(unittest.TestCase):
         np.testing.assert_allclose(direction, reference_x, atol=1e-8)
         self.assertEqual(axis["source"], "direct_visual_grasp_x_axis")
 
-    def test_add_window_candidates_sets_best_pose(self) -> None:
+    def test_add_window_candidates_sets_candidate_collection_without_best_pose(self) -> None:
         override = [float(value) for value in self.corners.reshape(-1)]
         result = {
             "status": "ok",
@@ -163,16 +182,17 @@ class WindowGraspTests(unittest.TestCase):
         self.assertEqual(updated["status"], "ok")
         self.assertEqual(updated["grasp_solution_mode"], "window_constrained")
         self.assertEqual(updated["grasp_pose_base_role"], "surface_normal_reference")
-        self.assertIn("best_grasp_pose_base", updated)
-        self.assertEqual(updated["best_grasp_pose_base"], updated["window_constrained_grasp_candidates"][0])
-        best = updated["best_grasp_pose_base"]
-        self.assertEqual(best["grasp_point_base_m"], best["translation_m"])
-        self.assertEqual(updated["grasp_point_base_m"], best["grasp_point_base_m"])
-        self.assertEqual(updated["tail_to_head_axis_base"], best["tail_to_head_axis_base"])
-        axis = best["tail_to_head_axis_base"]
+        self.assertNotIn("best_grasp_pose_base", updated)
+        self.assertNotIn("grasp_point_base_m", updated)
+        self.assertNotIn("tail_to_head_axis_base", updated)
+        self.assertEqual(len(updated["window_constrained_grasp_candidates"]), 9)
+        first = updated["window_constrained_grasp_candidates"][0]
+        self.assertEqual(first["grasp_point_base_m"], first["translation_m"])
+        self.assertNotIn("score_visual_geometry", first)
+        axis = first["tail_to_head_axis_base"]
         tail = np.asarray(axis["tail_point_m"], dtype=np.float64)
         head = np.asarray(axis["head_point_m"], dtype=np.float64)
-        point = np.asarray(best["grasp_point_base_m"], dtype=np.float64)
+        point = np.asarray(first["grasp_point_base_m"], dtype=np.float64)
         direction = np.asarray(axis["direction_unit"], dtype=np.float64)
         reference_x = np.asarray(self.reference_pose["rotation_matrix"], dtype=np.float64)[:, 0]
         np.testing.assert_allclose((tail + head) * 0.5, point, atol=1e-8)
