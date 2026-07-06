@@ -1,0 +1,107 @@
+model_id: 2175B
+source_step: plug_model/2175B.stp
+source_step_unit: millimeter
+asset_unit: meter
+frame: grasp
+downstream_transform_name: t_camera_grasp
+requires_manual_review: true
+assets:
+  mesh_obj: plug_model/2175B_grasp.obj
+  pointcloud_ply: plug_model/2175B_grasp.ply
+  review_report: plug_model/2175B_grasp_report.md
+semantic_points_grasp_m:
+  grasp_center:
+  - 0.0
+  - 0.0
+  - 0.0
+  tail_center:
+  - -0.08401198
+  - 0.0
+  - 0.0
+  head_center:
+  - 0.09628802
+  - 0.0
+  - 0.0
+dimensions_m:
+  head_tail_axis_length: 0.1803
+coordinate_system:
+  origin: estimated_grasp_grasp_origin_center
+  x_axis: tail_to_head
+  y_axis: gripper_closing_direction_from_projected_raw_cad_+Y
+  z_axis: approach_direction_right_handed_x_cross_y
+  raw_cad_to_grasp:
+    x_grasp_from_raw: +Z
+    y_grasp_from_raw: +Y_projected_perpendicular_to_+Z
+    z_grasp_from_raw: -X
+    origin_raw_mm:
+    - 0.0
+    - 0.0
+    - -96.288021
+    raw_basis_from_grasp_columns:
+      x_tail_to_head_raw:
+      - 0.0
+      - 0.0
+      - 1.0
+      y_closing_raw:
+      - 0.0
+      - 1.0
+      - 0.0
+      z_approach_raw:
+      - -1.0
+      - 0.0
+      - 0.0
+build:
+  tool: tools/build_grasp_model_assets.py
+  mesh_size_mm: 2.0
+  sample_points: 30000
+diagnostics:
+  source_bbox_raw_mm:
+    min:
+    - -47.000021
+    - -47.0
+    - -180.3
+    max:
+    - 47.000021
+    - 47.0
+    - 0.0
+    extent:
+    - 94.000042
+    - 94.0
+    - 180.3
+  raw_basis_from_grasp_columns:
+    x_tail_to_head_raw:
+    - 0.0
+    - 0.0
+    - 1.0
+    y_closing_raw:
+    - 0.0
+    - 1.0
+    - 0.0
+    z_approach_raw:
+    - -1.0
+    - 0.0
+    - 0.0
+  grasp_origin_estimation:
+    method: axis_profile_stable_cylinder_closest_to_axis_midpoint
+    confidence: medium
+    reason: selected_stable_cylindrical_region_closest_to_axis_midpoint
+    axis: raw_cad_z
+    axis_z_min_mm: -180.3
+    axis_z_max_mm: 0.0
+    axis_midpoint_z_mm: -90.15
+    head_tail_direction_assumption: raw_cad_+Z_is_tail_to_head
+    area_threshold_min_mm2: 2633.355128
+    area_threshold_max_mm2: 4832.590708
+    selected_region:
+      bin_start: 59
+      bin_end: 88
+      z_min_mm: -113.814375
+      z_max_mm: -80.008125
+      z_center_mm: -96.288021
+      mean_bbox_area_mm2: 3107.946406
+      mean_circularity_xy: 0.942791
+      point_count: 2582
+    grasp_center_raw_mm:
+    - 0.0
+    - 0.0
+    - -96.288021

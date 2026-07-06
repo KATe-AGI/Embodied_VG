@@ -60,99 +60,6 @@ def as_rotation_matrix(value: Any, name: str) -> list[list[float]]:
     return [as_float_vector(row, 3, f"{name}[{index}]") for index, row in enumerate(value)]
 
 
-def optional_float_vector(value: Any, length: int, name: str) -> list[float] | None:
-    if value is None:
-        return None
-    return as_float_vector(value, length, name)
-
-
-def build_window_view_data(result: dict[str, Any]) -> dict[str, Any] | None:
-    window = result.get("window_geometry_base")
-    if not isinstance(window, dict):
-        return None
-
-    corners = window.get("corners_base_m") or {}
-    full_corners = []
-    if isinstance(corners, dict):
-        for index in range(1, 5):
-            full_corners.append(as_float_vector(corners.get(f"W{index}"), 3, f"window_geometry_base.corners_base_m.W{index}"))
-    else:
-        return None
-
-    center = optional_float_vector(window.get("center_base_m"), 3, "window_geometry_base.center_base_m")
-    x_axis = optional_float_vector(window.get("x_window_base"), 3, "window_geometry_base.x_window_base")
-    y_axis = optional_float_vector(window.get("y_window_base"), 3, "window_geometry_base.y_window_base")
-    effective_width = window.get("effective_width_m")
-    effective_height = window.get("effective_height_m")
-    effective_corners = None
-    grid_lines = []
-    if center is not None and x_axis is not None and y_axis is not None and effective_width is not None and effective_height is not None:
-        ex = float(effective_width) * 0.5
-        ey = float(effective_height) * 0.5
-        effective_corners = [
-            [center[i] - x_axis[i] * ex - y_axis[i] * ey for i in range(3)],
-            [center[i] + x_axis[i] * ex - y_axis[i] * ey for i in range(3)],
-            [center[i] + x_axis[i] * ex + y_axis[i] * ey for i in range(3)],
-            [center[i] - x_axis[i] * ex + y_axis[i] * ey for i in range(3)],
-        ]
-        sampling = window.get("sampling") or {}
-        try:
-            grid_rows = int(sampling.get("grid_rows", 0))
-            grid_cols = int(sampling.get("grid_cols", 0))
-        except (TypeError, ValueError):
-            grid_rows = 0
-            grid_cols = 0
-        for col in range(1, grid_cols):
-            x_fraction = -0.5 + float(col) / float(grid_cols)
-            start = [center[i] + x_axis[i] * x_fraction * float(effective_width) - y_axis[i] * ey for i in range(3)]
-            end = [center[i] + x_axis[i] * x_fraction * float(effective_width) + y_axis[i] * ey for i in range(3)]
-            grid_lines.append({"axis": "col", "index": col, "start": start, "end": end})
-        for row in range(1, grid_rows):
-            y_fraction = -0.5 + float(row) / float(grid_rows)
-            start = [center[i] - x_axis[i] * ex + y_axis[i] * y_fraction * float(effective_height) for i in range(3)]
-            end = [center[i] + x_axis[i] * ex + y_axis[i] * y_fraction * float(effective_height) for i in range(3)]
-            grid_lines.append({"axis": "row", "index": row, "start": start, "end": end})
-
-    candidates = []
-    raw_candidates = result.get("window_constrained_grasp_candidates") or []
-    if isinstance(raw_candidates, list):
-        for item in raw_candidates:
-            if not isinstance(item, dict):
-                continue
-            point = optional_float_vector(item.get("window_point_base"), 3, "candidate.window_point_base")
-            z_axis = optional_float_vector(item.get("z_approach_base"), 3, "candidate.z_approach_base")
-            if point is None or z_axis is None:
-                continue
-            candidates.append(
-                {
-                    "index": item.get("index"),
-                    "grid_row": item.get("grid_row"),
-                    "grid_col": item.get("grid_col"),
-                    "sample_type": item.get("sample_type"),
-                    "window_point": point,
-                    "z_approach": z_axis,
-                    "score": item.get("score_visual_geometry"),
-                }
-            )
-
-    return {
-        "source": window.get("source"),
-        "full_corners": full_corners,
-        "effective_corners": effective_corners,
-        "center": center,
-        "normal": optional_float_vector(window.get("normal_base"), 3, "window_geometry_base.normal_base"),
-        "width": window.get("width_m"),
-        "height": window.get("height_m"),
-        "margin": window.get("margin_m"),
-        "effective_width": effective_width,
-        "effective_height": effective_height,
-        "sampling": window.get("sampling") or {},
-        "grid_lines": grid_lines,
-        "candidates": candidates,
-        "candidate_stats": result.get("window_candidate_stats") or {},
-    }
-
-
 def pose_view_from_dict(pose: dict[str, Any], prefix: str, pose_rad_key: str, pose_deg_key: str) -> dict[str, Any]:
     pose_rad = pose.get(pose_rad_key)
     pose_deg = pose.get(pose_deg_key)
@@ -175,18 +82,7 @@ def build_view_data(result: dict[str, Any], args: argparse.Namespace) -> dict[st
     if not isinstance(base_pose, dict):
         raise ValueError("OK result missing grasp_pose_base")
 
-    reference_pose = pose_view_from_dict(base_pose, "grasp_pose_base", "robot_pose_xyzrpy_m_rad", "robot_pose_xyzrpy_m_deg")
-    best_pose = result.get("best_grasp_pose_base")
-    if isinstance(best_pose, dict):
-        primary_pose = pose_view_from_dict(best_pose, "best_grasp_pose_base", "xyzrpy_m_rad", "xyzrpy_m_deg")
-        pose_role = "best_grasp_pose_base"
-        candidate_index = best_pose.get("index")
-        candidate_score = best_pose.get("score_visual_geometry")
-    else:
-        primary_pose = reference_pose
-        pose_role = "grasp_pose_base"
-        candidate_index = None
-        candidate_score = None
+    primary_pose = pose_view_from_dict(base_pose, "grasp_pose_base", "robot_pose_xyzrpy_m_rad", "robot_pose_xyzrpy_m_deg")
 
     return {
         "source_json": str(args.json),
@@ -196,16 +92,9 @@ def build_view_data(result: dict[str, Any], args: argparse.Namespace) -> dict[st
         "quaternion_xyzw": primary_pose["quaternion_xyzw"],
         "pose_rad": primary_pose["pose_rad"],
         "pose_deg": primary_pose["pose_deg"],
-        "pose_role": pose_role,
-        "candidate_index": candidate_index,
-        "candidate_score": candidate_score,
-        "reference_pose": {
-            **reference_pose,
-            "role": result.get("grasp_pose_base_role", "surface_normal_reference"),
-        },
+        "pose_role": "grasp_pose_base",
         "quality_score": (result.get("quality") or {}).get("quality_score"),
         "warnings": result.get("warnings") or [],
-        "window": build_window_view_data(result),
         "axis_length": float(args.axis_length),
         "model": {
             "length": float(args.model_length),
@@ -326,14 +215,9 @@ def render_html(view_data: dict[str, Any]) -> str:
     <div><span class="swatch" style="background:#079455"></span>Base/grasp +Y</div>
     <div><span class="swatch" style="background:#1570ef"></span>Base/grasp +Z</div>
     <div><span class="swatch" style="background:#f59e0b"></span>Simplified grasp body</div>
-    <div><span class="swatch" style="background:#94a3b8"></span>Surface-normal reference</div>
-    <div><span class="swatch" style="background:#0ea5e9"></span>Window</div>
-    <div><span class="swatch" style="background:#22d3ee"></span>Approach cone</div>
   </div>
   <h2>Pose</h2>
   <div id="pose"></div>
-  <h2>Window</h2>
-  <div id="window"></div>
   <h2>Quality</h2>
   <div id="quality"></div>
   <h2>Controls</h2>
@@ -345,7 +229,6 @@ const data = {data_json};
 const canvas = document.getElementById("scene");
 const ctx = canvas.getContext("2d");
 const poseEl = document.getElementById("pose");
-const windowEl = document.getElementById("window");
 const qualityEl = document.getElementById("quality");
 const state = {{
   yaw: -0.8,
@@ -374,31 +257,12 @@ function fillPanel() {{
   poseEl.innerHTML = [
     row("source", data.source_json),
     row("visualized", data.pose_role || "n/a"),
-    row("candidate", data.candidate_index === null || data.candidate_index === undefined ? "n/a" : data.candidate_index),
-    row("score", data.candidate_score === null || data.candidate_score === undefined ? "n/a" : fmt(data.candidate_score, 4)),
     row("xyz m", vec(data.center)),
     row("rpy rad", vec(data.pose_rad)),
     row("rpy deg", vec(data.pose_deg)),
     row("quat xyzw", vec(data.quaternion_xyzw)),
     row("convention", data.convention)
   ].join("");
-  if (data.window) {{
-    const stats = data.window.candidate_stats || {{}};
-    const candidates = data.window.candidates || [];
-    const sampling = data.window.sampling || {{}};
-    const grid = sampling.grid_rows && sampling.grid_cols ? `${{sampling.grid_rows}} x ${{sampling.grid_cols}}` : "n/a";
-    windowEl.innerHTML = [
-      row("source", data.window.source || "n/a"),
-      row("size m", `${{fmt(data.window.width, 4)}} x ${{fmt(data.window.height, 4)}}`),
-      row("effective", `${{fmt(data.window.effective_width, 4)}} x ${{fmt(data.window.effective_height, 4)}}`),
-      row("margin", fmt(data.window.margin, 4)),
-      row("sampling", sampling.mode || "n/a"),
-      row("grid", grid),
-      row("candidates", `${{stats.kept_count ?? candidates.length}} / ${{stats.sampled_count ?? "n/a"}}`)
-    ].join("");
-  }} else {{
-    windowEl.innerHTML = row("window", "not available");
-  }}
   qualityEl.innerHTML = [
     row("score", fmt(data.quality_score, 4)),
     row("warnings", (data.warnings || []).length ? data.warnings.join("<br>") : "none"),
@@ -453,19 +317,6 @@ function allScenePoints() {{
     data.center, axisEnd(0, l), axisEnd(1, l), axisEnd(2, l),
     ...body.v
   ];
-  if (data.reference_pose) {{
-    points.push(data.reference_pose.center);
-    points.push(axisEnd(0, l, data.reference_pose));
-    points.push(axisEnd(1, l, data.reference_pose));
-    points.push(axisEnd(2, l, data.reference_pose));
-  }}
-  if (data.window) {{
-    if (Array.isArray(data.window.full_corners)) points.push(...data.window.full_corners);
-    if (Array.isArray(data.window.effective_corners)) points.push(...data.window.effective_corners);
-    for (const candidate of data.window.candidates || []) {{
-      points.push(candidate.window_point);
-    }}
-  }}
   return points;
 }}
 
@@ -573,103 +424,6 @@ function drawCuboid(focus, scale) {{
   }}
 }}
 
-function drawPolygon(points, focus, scale, fillStyle, strokeStyle, lineWidth = 1.5) {{
-  if (!Array.isArray(points) || points.length < 3) return;
-  const projected = points.map(p => project(p, focus, scale));
-  ctx.beginPath();
-  for (let i = 0; i < projected.length; i++) {{
-    const p = projected[i];
-    if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
-  }}
-  ctx.closePath();
-  if (fillStyle) {{
-    ctx.fillStyle = fillStyle;
-    ctx.fill();
-  }}
-  ctx.strokeStyle = strokeStyle;
-  ctx.lineWidth = lineWidth;
-  ctx.stroke();
-}}
-
-function drawPlainLine(a, b, color, width = 1.5) {{
-  ctx.strokeStyle = color;
-  ctx.lineWidth = width;
-  ctx.beginPath();
-  ctx.moveTo(a.x, a.y);
-  ctx.lineTo(b.x, b.y);
-  ctx.stroke();
-}}
-
-function drawDashedLine(a, b, color, label, width = 2) {{
-  ctx.save();
-  ctx.setLineDash([7, 5]);
-  ctx.strokeStyle = color;
-  ctx.lineWidth = width;
-  ctx.beginPath();
-  ctx.moveTo(a.x, a.y);
-  ctx.lineTo(b.x, b.y);
-  ctx.stroke();
-  ctx.restore();
-  ctx.font = "12px ui-monospace, monospace";
-  ctx.fillStyle = color;
-  ctx.fillText(label, b.x + 6, b.y + 12);
-}}
-
-function faceDepth(points, focus) {{
-  return points.reduce((sum, point) => sum + viewPoint(point, focus)[2], 0) / points.length;
-}}
-
-function drawWindowAndCone(focus, scale) {{
-  if (!data.window) return;
-  const full = data.window.full_corners || [];
-  const effective = data.window.effective_corners || [];
-  const center = data.center;
-  const faces = [];
-
-  if (effective.length === 4) {{
-    faces.push({{ points: effective, fill: "rgba(14, 165, 233, 0.16)", stroke: "rgba(2, 132, 199, 0.95)", width: 2.4 }});
-    for (let i = 0; i < 4; i++) {{
-      faces.push({{
-        points: [center, effective[i], effective[(i + 1) % 4]],
-        fill: "rgba(34, 211, 238, 0.18)",
-        stroke: "rgba(8, 145, 178, 0.42)",
-        width: 1.1
-      }});
-    }}
-  }}
-  if (full.length === 4) {{
-    faces.push({{ points: full, fill: "rgba(100, 116, 139, 0.10)", stroke: "rgba(71, 85, 105, 0.9)", width: 1.8 }});
-  }}
-
-  faces.sort((a, b) => faceDepth(a.points, focus) - faceDepth(b.points, focus));
-  for (const face of faces) {{
-    drawPolygon(face.points, focus, scale, face.fill, face.stroke, face.width);
-  }}
-
-  const gridLines = data.window.grid_lines || [];
-  for (const line of gridLines) {{
-    drawPlainLine(
-      project(line.start, focus, scale),
-      project(line.end, focus, scale),
-      "rgba(2, 132, 199, 0.72)",
-      1.2
-    );
-  }}
-
-  const centerPx = project(center, focus, scale);
-  const candidates = data.window.candidates || [];
-  for (let i = 0; i < candidates.length; i++) {{
-    const candidate = candidates[i];
-    const p = project(candidate.window_point, focus, scale);
-    const isBest = i === 0;
-    drawPlainLine(p, centerPx, isBest ? "rgba(14, 116, 144, 0.95)" : "rgba(71, 85, 105, 0.38)", isBest ? 3.2 : 1.3);
-    ctx.fillStyle = isBest ? "#0e7490" : "#64748b";
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, isBest ? 4.2 : 2.8, 0, Math.PI * 2);
-    ctx.fill();
-  }}
-}}
-
 function draw() {{
   const rect = canvas.getBoundingClientRect();
   canvas.width = Math.max(1, Math.round(rect.width));
@@ -679,7 +433,6 @@ function draw() {{
   const focus = sceneFocus();
   const scale = projectedScale(focus);
   drawGrid(focus, scale);
-  drawWindowAndCone(focus, scale);
   drawCuboid(focus, scale);
 
   const origin = project([0, 0, 0], focus, scale);
@@ -687,13 +440,6 @@ function draw() {{
   drawLine(origin, project([l, 0, 0], focus, scale), "#d92d20", "base +X", 3);
   drawLine(origin, project([0, l, 0], focus, scale), "#079455", "base +Y", 3);
   drawLine(origin, project([0, 0, l], focus, scale), "#1570ef", "base +Z", 3);
-
-  if (data.reference_pose && data.pose_role === "best_grasp_pose_base") {{
-    const refCenter = project(data.reference_pose.center, focus, scale);
-    drawDashedLine(refCenter, project(axisEnd(0, l, data.reference_pose), focus, scale), "rgba(185, 28, 28, 0.62)", "ref +X", 2);
-    drawDashedLine(refCenter, project(axisEnd(1, l, data.reference_pose), focus, scale), "rgba(4, 120, 87, 0.62)", "ref +Y", 2);
-    drawDashedLine(refCenter, project(axisEnd(2, l, data.reference_pose), focus, scale), "rgba(29, 78, 216, 0.62)", "ref +Z", 2);
-  }}
 
   const center = project(data.center, focus, scale);
   ctx.fillStyle = "#111827";

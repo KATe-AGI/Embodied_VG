@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate trained YOLO26s plug segmentation and head/tail pose models."""
+"""Validate the YOLO visible-plug segmentation model."""
 
 from __future__ import annotations
 
@@ -18,21 +18,11 @@ if str(ULTRALYTICS_DIR) not in sys.path:
 from ultralytics import YOLO  # noqa: E402
 
 
-DATASET = ROOT / "plug_dataset_all_20260520" / "yolo_train"
-DEFAULTS = {
-    "segment": {
-        "weights": ULTRALYTICS_DIR / "runs" / "segment" / "plug_yolo26s_seg_v1" / "weights" / "best.pt",
-        "data": DATASET / "seg" / "plug_seg.yaml",
-        "project": ULTRALYTICS_DIR / "runs" / "segment",
-        "name": "plug_yolo26s_seg_v1_val",
-    },
-    "pose": {
-        "weights": ULTRALYTICS_DIR / "runs" / "pose" / "plug_yolo26s_pose_v1" / "weights" / "best.pt",
-        "data": DATASET / "pose" / "plug_pose.yaml",
-        "project": ULTRALYTICS_DIR / "runs" / "pose",
-        "name": "plug_yolo26s_pose_v1_val",
-    },
-}
+DATASET = ROOT / "plug_dataset_all_20260529" / "yolo_train"
+DEFAULT_WEIGHTS = ULTRALYTICS_DIR / "runs" / "segment" / "plug_yolo26s_seg_20260529-2" / "weights" / "best.pt"
+DEFAULT_DATA = DATASET / "seg" / "plug_seg.yaml"
+DEFAULT_PROJECT = ULTRALYTICS_DIR / "runs" / "segment"
+DEFAULT_NAME = "plug_yolo26s_seg_20260529_val"
 
 
 def absolute_data_yaml(path: Path) -> Path:
@@ -55,40 +45,31 @@ def absolute_data_yaml(path: Path) -> Path:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--task", choices=("all", "segment", "pose"), default="all", help="Model(s) to validate.")
     parser.add_argument("--imgsz", type=int, default=640, help="Validation image size.")
     parser.add_argument("--batch", type=int, default=8, help="Validation batch size.")
     parser.add_argument("--device", default=None, help="CUDA device, e.g. 0, or cpu.")
     parser.add_argument("--exist-ok", action="store_true", help="Reuse an existing validation directory.")
-    parser.add_argument("--seg-weights", type=Path, default=DEFAULTS["segment"]["weights"], help="Segmentation weights.")
-    parser.add_argument("--pose-weights", type=Path, default=DEFAULTS["pose"]["weights"], help="Pose weights.")
-    parser.add_argument("--seg-data", type=Path, default=DEFAULTS["segment"]["data"], help="Segmentation data YAML.")
-    parser.add_argument("--pose-data", type=Path, default=DEFAULTS["pose"]["data"], help="Pose data YAML.")
+    parser.add_argument("--weights", type=Path, default=DEFAULT_WEIGHTS, help="Segmentation weights.")
+    parser.add_argument("--data", type=Path, default=DEFAULT_DATA, help="Segmentation data YAML.")
+    parser.add_argument("--project", type=Path, default=DEFAULT_PROJECT, help="Ultralytics output project directory.")
+    parser.add_argument("--name", default=DEFAULT_NAME, help="Ultralytics run name.")
     return parser.parse_args()
-
-
-def val_one(task: str, weights: Path, data_yaml: Path, args: argparse.Namespace) -> None:
-    run = DEFAULTS[task]
-    data_abs = absolute_data_yaml(data_yaml)
-    print(f"\n=== Validating {task}: weights={weights}, data={data_abs} ===")
-    model = YOLO(str(weights))
-    model.val(
-        data=str(data_abs),
-        imgsz=args.imgsz,
-        batch=args.batch,
-        project=str(run["project"]),
-        name=run["name"],
-        device=args.device,
-        exist_ok=args.exist_ok,
-    )
 
 
 def main() -> None:
     args = parse_args()
-    if args.task in ("all", "segment"):
-        val_one("segment", args.seg_weights, args.seg_data, args)
-    if args.task in ("all", "pose"):
-        val_one("pose", args.pose_weights, args.pose_data, args)
+    data_abs = absolute_data_yaml(args.data)
+    print(f"\n=== Validating visible-plug segmentation: weights={args.weights}, data={data_abs} ===")
+    model = YOLO(str(args.weights))
+    model.val(
+        data=str(data_abs),
+        imgsz=args.imgsz,
+        batch=args.batch,
+        project=str(args.project),
+        name=args.name,
+        device=args.device,
+        exist_ok=args.exist_ok,
+    )
 
 
 if __name__ == "__main__":

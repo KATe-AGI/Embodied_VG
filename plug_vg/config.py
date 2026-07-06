@@ -1,4 +1,4 @@
-"""Shared project paths, camera loading, and plug physical parameters."""
+"""Shared project paths and camera loading."""
 
 from __future__ import annotations
 
@@ -15,13 +15,7 @@ YOLO_DATASET = DATASET / "yolo_train"
 DEFAULT_CAMERA = ROOT / "configs" / "camera" / "plug_rgbd.yaml"
 DEFAULT_MANIFEST = RGBD_TEST / "meta" / "frame_manifest.csv"
 
-DEFAULT_SEG_WEIGHTS = ULTRALYTICS_DIR / "runs" / "segment" / "plug_yolo26s_seg_20260529" / "weights" / "best.pt"
-DEFAULT_POSE_WEIGHTS = ULTRALYTICS_DIR / "runs" / "pose" / "plug_yolo26s_pose_20260529" / "weights" / "best.pt"
-
-GRASP_REGION_LENGTH_M = 0.085
-GRASP_REGION_WIDTH_M = 0.055
-GRASP_REGION_THICKNESS_M = GRASP_REGION_WIDTH_M
-HEAD_TAIL_DISTANCE_M = 0.165
+DEFAULT_SEG_WEIGHTS = ULTRALYTICS_DIR / "runs" / "segment" / "plug_yolo26s_seg_20260529-2" / "weights" / "best.pt"
 
 
 def load_camera(path: Path) -> dict[str, Any]:

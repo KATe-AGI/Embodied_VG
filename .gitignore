@@ -21,6 +21,7 @@ Thumbs.db
 # Datasets and collected sensor data
 plug_dataset_all_20260520/
 plug_dataset_all_20260529/
+yolo_plug_dataset/
 extra/
 test_*/
 hand_eye_calibration/eye_hand_data/**/*
@@ -39,6 +40,7 @@ outputs/
 output/
 logs/
 *.log
+plug_model/review/
 
 # Model weights and exported model artifacts
 *.pt

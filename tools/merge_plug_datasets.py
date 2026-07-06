@@ -98,29 +98,13 @@ def merge_csvs(inputs: list[Path], output: Path, key_field: str = "raw_id") -> t
 
 def write_yolo_yaml(output: Path) -> None:
     seg = output / "yolo_train" / "seg" / "plug_seg.yaml"
-    pose = output / "yolo_train" / "pose" / "plug_pose.yaml"
     seg.parent.mkdir(parents=True, exist_ok=True)
-    pose.parent.mkdir(parents=True, exist_ok=True)
     seg.write_text(
         f"path: {output.as_posix()}/yolo_train/seg\n"
         "train: images/train\n"
         "val: images/val\n\n"
         "names:\n"
-        "  0: plug_grasp_region\n",
-        encoding="utf-8",
-    )
-    pose.write_text(
-        f"path: {output.as_posix()}/yolo_train/pose\n"
-        "train: images/train\n"
-        "val: images/val\n\n"
-        "kpt_shape: [2, 3]\n"
-        "flip_idx: [0, 1]\n\n"
-        "names:\n"
-        "  0: plug\n\n"
-        "kpt_names:\n"
-        "  0:\n"
-        "    - plug_head\n"
-        "    - plug_tail\n",
+        "  0: visible_plug\n",
         encoding="utf-8",
     )
 
@@ -148,8 +132,6 @@ def copy_yolo_manifest_files(inputs: list[Path], output: Path) -> tuple[Counter,
         "standard_annotation": "standard_annotations",
         "seg_image": "seg_{split}_images",
         "seg_label": "seg_{split}_labels",
-        "pose_image": "pose_{split}_images",
-        "pose_label": "pose_{split}_labels",
     }
 
     for dataset in inputs:
@@ -209,7 +191,6 @@ def merge_yolo_train(inputs: list[Path], output: Path) -> dict[str, Any]:
         },
         "yolo_train": {
             "segmentation_yaml": "yolo_train/seg/plug_seg.yaml",
-            "pose_yaml": "yolo_train/pose/plug_pose.yaml",
             "annotations_standard": "yolo_train/annotations_standard",
             "meta": "yolo_train/meta",
         },
@@ -240,6 +221,7 @@ def merge_rgbd_test(inputs: list[Path], output: Path) -> dict[str, Any]:
         "color_images": "rgbd_test/color/color_*.png",
         "d2rgb_png": "rgbd_test/D2RGB/D2RGB_*.png",
         "d2rgb_jpg": "rgbd_test/D2RGB/D2RGB_*.jpg",
+        "d2rgb_npy": "rgbd_test/D2RGB/*_d2rgb.npy",
     }
     for name, pattern in patterns.items():
         c, s = copy_glob(inputs, pattern, output)
@@ -280,6 +262,7 @@ def update_dataset_info(output: Path, inputs: list[Path], parts: set[str], summa
             "color": "rgbd_test/color/color_*.png",
             "D2RGB_png": "rgbd_test/D2RGB/D2RGB_*.png",
             "D2RGB_jpg": "rgbd_test/D2RGB/D2RGB_*.jpg",
+            "D2RGB_npy": "rgbd_test/D2RGB/*_d2rgb.npy",
             "counts": summaries["rgbd_test"]["counts"],
         }
     info_path.write_text(json.dumps(info, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
