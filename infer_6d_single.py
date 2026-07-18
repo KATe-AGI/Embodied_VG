@@ -293,10 +293,10 @@ def print_result(result: dict[str, Any], output_path: Path) -> None:
     if result.get("status") == "ok":
         grasp_pose_base = result.get("grasp_pose_base") or {}
         print(f"grasp_pose_base.robot_pose_xyzrpy_m_rad: {grasp_pose_base.get('robot_pose_xyzrpy_m_rad')}")
-        print(f"grasp_pose_base.robot_pose_xyzrpy_m_deg: {grasp_pose_base.get('robot_pose_xyzrpy_m_deg')}")
         print(f"grasp_point_base_m: {result.get('grasp_point_base_m')}")
-        axis = result.get("tail_to_head_axis_base") or {}
-        print(f"tail_to_head_axis_base.direction_unit: {axis.get('direction_unit')}")
+        semantic_points_base = result.get("semantic_points_base") or {}
+        print(f"head_center_base_m: {semantic_points_base.get('head_center_base_m')}")
+        print(f"tail_center_base_m: {semantic_points_base.get('tail_center_base_m')}")
     else:
         print(f"reason: {result.get('reason')}")
         quality = result.get("registration_quality") or {}
