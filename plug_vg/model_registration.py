@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 
 from .grasp_model import transform_points
+from .ring_coarse_registration import ring_aligned_candidates
 from .robot_transform import round_list
 from .visible_points import voxel_downsample
 
@@ -26,7 +27,11 @@ def _rotation_about_x(angle_rad: float) -> np.ndarray:
     return np.asarray([[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]], dtype=np.float64)
 
 
-def candidate_transforms_with_rolls(source_points: np.ndarray, target_points: np.ndarray, roll_angles_deg: tuple[float, ...]) -> list[dict[str, Any]]:
+def candidate_transforms_with_rolls(
+    source_points: np.ndarray,
+    target_points: np.ndarray,
+    roll_angles_deg: tuple[float, ...],
+) -> list[dict[str, Any]]:
     values, vectors = pca_basis(target_points)
     source_centroid = np.mean(source_points, axis=0)
     target_centroid = np.mean(target_points, axis=0)
@@ -184,9 +189,21 @@ def register_visible_points(
             "scene_outlier_rejected": int(outlier_rejected),
         }
 
-    candidates = candidate_transforms_with_rolls(model_down, scene_down, (0.0, 90.0, 180.0, 270.0))
+    pca_candidates = candidate_transforms_with_rolls(
+        model_down,
+        scene_down,
+        (0.0, 90.0, 180.0, 270.0),
+    )
+    scene_axis = pca_basis(scene_down)[1][:, 0]
+    candidates = ring_aligned_candidates(
+        model_down,
+        scene_down,
+        scene_axis,
+        pca_candidates,
+        voxel_size_m,
+    )
     if not candidates:
-        return "failed", None, {"reason": "initial_transform_generation_failed"}
+        return "failed", None, {"reason": "large_ring_detection_failed"}
 
     scored: list[dict[str, Any]] = []
     for candidate in candidates:
@@ -218,8 +235,29 @@ def register_visible_points(
             "icp_inlier_rmse": round(float(reg.inlier_rmse), 8),
             "target_pca_eigenvalues": item["target_pca_eigenvalues"],
         }
+        if item.get("initializer") == "large_ring_center":
+            summary.update(
+                {
+                    "initializer": item["initializer"],
+                    "ring_hypothesis": item["ring_hypothesis"],
+                    "model_ring_center_grasp_m": round_list(item["model_ring_center_grasp_m"]),
+                    "scene_ring_center_camera_m": round_list(item["scene_ring_center_camera_m"]),
+                    "model_ring_radius_m": round(float(item["model_ring_radius_m"]), 8),
+                    "scene_ring_radius_m": round(float(item["scene_ring_radius_m"]), 8),
+                    "ring_fit_residual_m": round(float(item["ring_fit_residual_m"]), 8),
+                    "ring_point_count": int(item["ring_point_count"]),
+                }
+            )
         candidate_summaries.append(summary)
-        ranked.append({"summary": summary, "transform": t_camera_grasp, "fitness": float(reg.fitness), "rmse": float(reg.inlier_rmse)})
+        ranked.append(
+            {
+                "summary": summary,
+                "transform": t_camera_grasp,
+                "fitness": float(reg.fitness),
+                "rmse": float(reg.inlier_rmse),
+                "initializer": item.get("initializer", "pca_centroid"),
+            }
+        )
 
     status, best, gate_quality = select_registration_candidate(
         ranked,
@@ -240,6 +278,7 @@ def register_visible_points(
         "scene_points_used": int(len(scene_down)),
         "scene_outlier_rejected": int(outlier_rejected),
         "registration_direction": "scene_to_model_then_invert",
+        "registration_strategy": "large_ring_coarse_then_icp",
         "candidates": candidate_summaries,
     }
     if status == "failed" or best is None:
