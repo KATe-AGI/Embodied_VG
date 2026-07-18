@@ -12,7 +12,7 @@ from .config import ROOT
 from .robot_transform import round_list
 
 
-DEFAULT_GRASP_MODEL_CONFIG = ROOT / "configs" / "plug_models" / "2175B.yaml"
+DEFAULT_GRASP_MODEL_CONFIG = ROOT / "configs" / "plug_models" / "plugCAD.yaml"
 
 
 @dataclass(frozen=True)

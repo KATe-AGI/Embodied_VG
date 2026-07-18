@@ -193,8 +193,6 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
             args.max_scene_points,
             args.min_registration_fitness,
             args.max_inlier_rmse,
-            args.ambiguity_fitness_margin,
-            args.ambiguity_rmse_margin,
             args.seed,
         )
         semantic = semantic_points_camera(model.config, t_camera_grasp) if t_camera_grasp is not None else None
@@ -258,7 +256,7 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
                         semantic,
                         "tail_center_camera_m",
                         "head_center_camera_m",
-                        "2175B_grasp_frame_semantic_points",
+                        f"{model.config.get('model_id', 'plug')}_grasp_frame_semantic_points",
                     ),
                 }
             )
@@ -297,8 +295,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-scene-points", type=int, default=50000, help="Maximum visible scene points used.")
     parser.add_argument("--min-registration-fitness", type=float, default=0.35, help="Minimum accepted ICP fitness.")
     parser.add_argument("--max-inlier-rmse", type=float, default=0.012, help="Maximum accepted ICP inlier RMSE in meters.")
-    parser.add_argument("--ambiguity-fitness-margin", type=float, default=0.05, help="Ambiguity threshold for candidate fitness gap.")
-    parser.add_argument("--ambiguity-rmse-margin", type=float, default=0.003, help="Ambiguity threshold for candidate RMSE gap in meters.")
     parser.add_argument("--seed", type=int, default=0, help="Sampling seed.")
     parser.add_argument("--save-review", action="store_true", help="Save interactive HTML review artifact.")
     return parser.parse_args()

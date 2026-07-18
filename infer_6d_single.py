@@ -32,20 +32,37 @@ from plug_vg.grasp_model import (  # noqa: E402
 )
 from plug_vg.io import read_depth_raw, write_json  # noqa: E402
 from plug_vg.model_registration import register_visible_points  # noqa: E402
-from plug_vg.registration_review import read_realsense_binary_ply, write_interactive_review_html  # noqa: E402
+from plug_vg.registration_review import write_interactive_review_html, write_registration_comparison_ply  # noqa: E402
 from plug_vg.robot_transform import convert_camera_grasp_to_base, load_hand_eye_matrix, robot_pose_to_matrix, round_list  # noqa: E402
-from plug_vg.visible_points import extract_visible_points_from_mask, save_mask_overlay, save_visible_points_ply  # noqa: E402
+from plug_vg.visible_points import (  # noqa: E402
+    extract_visible_points_from_mask,
+    save_mask_overlay,
+    save_visible_points_ply,
+    synthesize_scene_point_cloud,
+)
 from plug_vg.vision import serialize_seg  # noqa: E402
 
-'''
+
+
+r'''
+# conda activate embodiedvg
+
+# Ubuntu / bash
 python infer_6d_single.py \
-  --rgb test_20260703/20260705_105701_219_color.png \
-  --d2rgb test_20260703/20260705_105701_219_d2rgb.npy \
-  --scene-ply test_20260703/20260705_105701_219_pointcloud.ply \
+  --rgb test_20260701/20260701_155018_359_color.png \
+  --d2rgb test_20260701/20260701_155018_359_d2rgb.npy \
   --robot-pose -0.712547 0.000064 0.581025 -2.279 0.216 1.488 \
   --output-dir output/plug_6d_single \
-  --save-overlay \
   --save-ply \
+  --save-review
+
+# Windows PowerShell
+python .\infer_6d_single.py `
+  --rgb .\test_20260701\20260701_155018_359_color.png `
+  --d2rgb .\test_20260701\20260701_155018_359_d2rgb.npy `
+  --robot-pose -0.712547 0.000064 0.581025 -2.279 0.216 1.488 `
+  --output-dir .\output\plug_6d_single `
+  --save-ply `
   --save-review
 '''
 
@@ -69,7 +86,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, required=True, help="Directory for JSON and debug artifacts.")
     parser.add_argument("--seg-weights", type=Path, default=DEFAULT_SEG_WEIGHTS, help="Visible-plug segmentation weights.")
     parser.add_argument("--model-config", type=Path, default=DEFAULT_GRASP_MODEL_CONFIG, help="Grasp-frame CAD model YAML.")
-    parser.add_argument("--scene-ply", type=Path, default=None, help="Optional full-scene RealSense PLY for review only.")
     parser.add_argument("--camera-config", type=Path, default=DEFAULT_CAMERA, help="RGB-D camera intrinsics YAML.")
     parser.add_argument("--hand-eye-config", type=Path, default=DEFAULT_HAND_EYE, help="Eye-in-hand calibration YAML containing T_end_camera.")
     parser.add_argument("--robot-config", type=Path, default=DEFAULT_ROBOT_CONFIG, help="Robot config YAML.")
@@ -90,8 +106,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-scene-points", type=int, default=12000, help="Max visible points before registration sampling.")
     parser.add_argument("--min-registration-fitness", type=float, default=0.35, help="Minimum ICP fitness for ok status.")
     parser.add_argument("--max-inlier-rmse", type=float, default=0.012, help="Maximum ICP inlier RMSE in meters for ok status.")
-    parser.add_argument("--ambiguity-fitness-margin", type=float, default=0.05, help="Fitness gap under which top candidates are ambiguous.")
-    parser.add_argument("--ambiguity-rmse-margin", type=float, default=0.003, help="RMSE gap under which top candidates are ambiguous.")
     parser.add_argument("--seed", type=int, default=7, help="Deterministic sampling seed.")
     parser.add_argument("--save-overlay", action="store_true", help="Save visible mask overlay.")
     parser.add_argument("--save-ply", action="store_true", help="Save visible plug point cloud PLY.")
@@ -126,7 +140,6 @@ def input_summary(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "rgb": str(args.rgb),
         "d2rgb": str(args.d2rgb),
-        "scene_ply": None if args.scene_ply is None else str(args.scene_ply),
         "seg_weights": str(args.seg_weights),
         "model_config": str(args.model_config),
         "robot_pose_xyzrpy_m_rad": [float(v) for v in args.robot_pose],
@@ -224,6 +237,8 @@ def _save_rgb_projection(
 def _save_review(
     args: argparse.Namespace,
     html_path: Path,
+    image_bgr: np.ndarray,
+    depth_raw: np.ndarray,
     visible_points: np.ndarray,
     model_points: np.ndarray,
     t_camera_grasp: np.ndarray | None,
@@ -233,12 +248,13 @@ def _save_review(
     quality: dict[str, Any],
     camera: dict[str, Any],
 ) -> None:
-    scene_points = visible_points
-    scene_colors = None
-    if args.scene_ply is not None and args.scene_ply.is_file():
-        scene_cloud = read_realsense_binary_ply(args.scene_ply)
-        scene_points = scene_cloud.points
-        scene_colors = scene_cloud.colors
+    scene_points, scene_colors = synthesize_scene_point_cloud(
+        image_bgr,
+        depth_raw,
+        camera,
+        args.min_depth,
+        args.max_depth,
+    )
     write_interactive_review_html(
         html_path,
         scene_points,
@@ -252,6 +268,23 @@ def _save_review(
         quality,
         args.seed,
         camera,
+    )
+
+
+def _register_points(args: argparse.Namespace, model_points: np.ndarray, scene_points: np.ndarray):
+    return register_visible_points(
+        model_points,
+        scene_points,
+        voxel_size_m=args.voxel_size,
+        outlier_nb_neighbors=args.outlier_nb_neighbors,
+        outlier_std_ratio=args.outlier_std_ratio,
+        icp_threshold_m=args.icp_threshold,
+        icp_iterations=args.icp_iterations,
+        max_model_points=args.max_model_points,
+        max_scene_points=args.max_scene_points,
+        min_registration_fitness=args.min_registration_fitness,
+        max_inlier_rmse_m=args.max_inlier_rmse,
+        seed=args.seed,
     )
 
 
@@ -277,7 +310,35 @@ def print_result(result: dict[str, Any], output_path: Path) -> None:
     print(f"json: {output_path}")
     timing = result.get("timing") or {}
     if timing:
-        print(f"Timing: single end-to-end = {timing.get('single_end_to_end_s')} (s)")
+        core = (
+            f"model load={timing.get('model_load_s')} s, "
+            f"YOLO forward={timing.get('segmentation_s')} s, "
+            f"point extraction={timing.get('visible_points_s')} s, "
+            f"registration={timing.get('registration_s')} s, "
+            f"coordinate transform={timing.get('coordinate_transform_s')} s, "
+            f"other/review/I/O={timing.get('other_review_io_s')} s"
+        )
+        print(f"Timing: single end-to-end = {timing.get('single_end_to_end_s')} s ({core})")
+        print(
+            "Timing: warm online inference = "
+            f"{timing.get('warm_online_inference_s')} s "
+            "(YOLO forward + point extraction + registration + coordinate transform)"
+        )
+
+
+def _finalize_timing(timing: dict[str, float], t0: float) -> dict[str, float]:
+    """Add one-shot and model-resident timing summaries."""
+
+    for key in ("model_load_s", "segmentation_s", "visible_points_s", "registration_s", "coordinate_transform_s"):
+        timing.setdefault(key, 0.0)
+    warm_keys = ["segmentation_s", "visible_points_s", "registration_s", "coordinate_transform_s"]
+    warm = sum(float(timing[key]) for key in warm_keys)
+    total = time.perf_counter() - t0
+    measured = float(timing["model_load_s"]) + warm
+    timing["warm_online_inference_s"] = round(warm, 6)
+    timing["other_review_io_s"] = round(max(0.0, total - measured), 6)
+    timing["single_end_to_end_s"] = round(total, 6)
+    return timing
 
 
 def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
@@ -313,9 +374,11 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
 
     stage_t0 = time.perf_counter()
     seg_model = YOLO(str(args.seg_weights))
+    timing = {"model_load_s": round(time.perf_counter() - stage_t0, 6)}
+    stage_t0 = time.perf_counter()
     seg_items = run_segmentation(image, seg_model, args)
     seg_item = choose_segmentation(seg_items)
-    timing = {"segmentation_s": round(time.perf_counter() - stage_t0, 6)}
+    timing["segmentation_s"] = round(time.perf_counter() - stage_t0, 6)
     stage1_segmentation = _segmentation_summary(seg_item)
 
     if seg_item is None:
@@ -324,7 +387,7 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
             {
                 "stage1_segmentation": stage1_segmentation,
                 "artifacts": artifacts,
-                "timing": {**timing, "single_end_to_end_s": round(time.perf_counter() - t0, 6)},
+                "timing": _finalize_timing(timing, t0),
             }
         )
         write_json(json_path, result)
@@ -344,7 +407,6 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
     )
     timing["visible_points_s"] = round(time.perf_counter() - stage_t0, 6)
     warnings = list(extraction.warnings)
-
     if args.save_overlay or args.save_review:
         overlay_path = args.output_dir / f"{args.rgb.stem}_visible_mask.jpg"
         save_mask_overlay(image, extraction.mask, overlay_path)
@@ -356,34 +418,19 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
 
     if extraction.status != "ok":
         result = make_failure(args, extraction.reason or "visible_point_extraction_failed", warnings)
-        result.update(
-            {
-                "stage1_segmentation": stage1_segmentation,
-                "visible_point_cloud": _visible_summary(extraction),
-                "artifacts": artifacts,
-                "timing": {**timing, "single_end_to_end_s": round(time.perf_counter() - t0, 6)},
-            }
-        )
+        result.update({
+            "stage1_segmentation": stage1_segmentation,
+            "visible_point_cloud": _visible_summary(extraction),
+            "artifacts": artifacts,
+            "timing": _finalize_timing(timing, t0),
+        })
         write_json(json_path, result)
         return result, json_path
 
     model = load_grasp_model(args.model_config)
     stage_t0 = time.perf_counter()
-    reg_status, t_camera_grasp, registration_quality = register_visible_points(
-        model.points_grasp_m,
-        extraction.visible_points_camera_m,
-        voxel_size_m=args.voxel_size,
-        outlier_nb_neighbors=args.outlier_nb_neighbors,
-        outlier_std_ratio=args.outlier_std_ratio,
-        icp_threshold_m=args.icp_threshold,
-        icp_iterations=args.icp_iterations,
-        max_model_points=args.max_model_points,
-        max_scene_points=args.max_scene_points,
-        min_registration_fitness=args.min_registration_fitness,
-        max_inlier_rmse_m=args.max_inlier_rmse,
-        ambiguity_fitness_margin=args.ambiguity_fitness_margin,
-        ambiguity_rmse_margin_m=args.ambiguity_rmse_margin,
-        seed=args.seed,
+    reg_status, t_camera_grasp, registration_quality = _register_points(
+        args, model.points_grasp_m, extraction.visible_points_camera_m
     )
     timing["registration_s"] = round(time.perf_counter() - stage_t0, 6)
 
@@ -397,6 +444,8 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
         _save_review(
             args,
             review_path,
+            image,
+            depth,
             extraction.visible_points_camera_m,
             model.points_grasp_m,
             t_camera_grasp,
@@ -407,6 +456,14 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
             camera,
         )
         artifacts["registration_review_html"] = str(review_path)
+        comparison_path = args.output_dir / f"{args.rgb.stem}_point_cloud_comparison.ply"
+        write_registration_comparison_ply(
+            comparison_path,
+            extraction.visible_points_camera_m,
+            model.points_grasp_m,
+            t_camera_grasp,
+        )
+        artifacts["point_cloud_comparison_ply"] = str(comparison_path)
 
     common = {
         "input": input_summary(args),
@@ -415,10 +472,10 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
         "registration_quality": registration_quality,
         "artifacts": artifacts,
         "warnings": warnings,
-        "timing": {**timing, "single_end_to_end_s": round(time.perf_counter() - t0, 6)},
+        "timing": timing,
     }
-
     if reg_status != "ok" or t_camera_grasp is None or semantic_camera_points is None:
+        _finalize_timing(timing, t0)
         result = {
             "status": reg_status,
             "reason": registration_quality.get("reason", "registration_failed"),
@@ -427,7 +484,9 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
         write_json(json_path, result)
         return result, json_path
 
+    stage_t0 = time.perf_counter()
     semantic_base_points = transform_semantic_points_to_base(semantic_camera_points, t_base_camera)
+    semantic_source = f"{model.config.get('model_id', 'plug')}_grasp_frame_semantic_points"
     result = {
         "status": "ok",
         "t_camera_grasp": round_list(t_camera_grasp),
@@ -437,7 +496,7 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
             semantic_camera_points,
             "tail_center_camera_m",
             "head_center_camera_m",
-            "2175B_grasp_frame_semantic_points",
+            semantic_source,
         ),
         "semantic_points_base": semantic_base_points,
         "grasp_point_base_m": semantic_base_points["grasp_center_base_m"],
@@ -445,11 +504,13 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
             semantic_base_points,
             "tail_center_base_m",
             "head_center_base_m",
-            "2175B_grasp_frame_semantic_points",
+            semantic_source,
         ),
         **common,
     }
     result = convert_camera_grasp_to_base(result, t_base_end, t_end_camera, args.hand_eye_config, args.robot_config)
+    timing["coordinate_transform_s"] = round(time.perf_counter() - stage_t0, 6)
+    _finalize_timing(timing, t0)
     write_json(json_path, result)
     return result, json_path
 

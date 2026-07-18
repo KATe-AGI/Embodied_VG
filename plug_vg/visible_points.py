@@ -72,6 +72,36 @@ def voxel_downsample(points: np.ndarray, voxel_size_m: float) -> np.ndarray:
     return points[keep_indices]
 
 
+def synthesize_scene_point_cloud(
+    image_bgr: np.ndarray,
+    depth_raw: np.ndarray,
+    camera: dict[str, Any],
+    min_depth_m: float,
+    max_depth_m: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Back-project valid D2RGB pixels into a colored RGB-camera-frame cloud."""
+
+    if image_bgr is None or image_bgr.ndim < 3 or image_bgr.shape[2] < 3:
+        raise ValueError("image_bgr must be a BGR image array")
+    if depth_raw.ndim == 3:
+        depth_raw = depth_raw[:, :, 0]
+    if image_bgr.shape[:2] != depth_raw.shape[:2]:
+        raise ValueError(
+            "RGB and D2RGB shapes must match for scene point cloud synthesis, "
+            f"got RGB {image_bgr.shape[1]}x{image_bgr.shape[0]} and "
+            f"depth {depth_raw.shape[1]}x{depth_raw.shape[0]}"
+        )
+
+    mask = np.ones(depth_raw.shape[:2], dtype=np.uint8)
+    points, pixels, _z = _depth_to_camera_points(mask, depth_raw, camera, min_depth_m, max_depth_m)
+    if not len(points):
+        return points, np.empty((0, 3), dtype=np.float64)
+    xy = pixels.astype(np.int64)
+    colors_bgr = image_bgr[xy[:, 1], xy[:, 0], :3]
+    colors_rgb = colors_bgr[:, ::-1].astype(np.float64) / 255.0
+    return points, colors_rgb
+
+
 def extract_visible_points_from_mask(
     image_bgr: np.ndarray,
     depth_raw: np.ndarray | None,

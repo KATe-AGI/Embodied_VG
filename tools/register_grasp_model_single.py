@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CONFIG = ROOT / "configs" / "plug_models" / "2175B.yaml"
+DEFAULT_CONFIG = ROOT / "configs" / "plug_models" / "plugCAD.yaml"
 DEFAULT_OUTPUT_DIR = ROOT / "ultralytics" / "runs" / "grasp_model_registration_single"
 
 
