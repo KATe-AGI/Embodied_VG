@@ -40,7 +40,7 @@ outputs/
 output/
 logs/
 *.log
-plug_model/review/
+plug_model/
 
 # Model weights and exported model artifacts
 *.pt

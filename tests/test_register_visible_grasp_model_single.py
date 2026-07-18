@@ -9,12 +9,15 @@ from plug_vg.model_registration import select_registration_candidate
 
 
 class RegisterVisibleGraspModelSingleTests(unittest.TestCase):
-    def ranked(self, name: str, fitness: float, rmse: float) -> dict:
+    def ranked(self, name: str, fitness: float, rmse: float, x_sign: float = 1.0) -> dict:
+        transform = np.eye(4, dtype=np.float64)
+        transform[0, 0] = x_sign
+        transform[2, 2] = x_sign
         return {
             "summary": {"name": name},
             "fitness": fitness,
             "rmse": rmse,
-            "transform": np.eye(4, dtype=np.float64),
+            "transform": transform,
         }
 
     def test_selects_highest_fitness_then_lowest_rmse(self) -> None:
@@ -26,8 +29,6 @@ class RegisterVisibleGraspModelSingleTests(unittest.TestCase):
             ],
             min_registration_fitness=0.35,
             max_inlier_rmse_m=0.012,
-            ambiguity_fitness_margin=0.01,
-            ambiguity_rmse_margin_m=0.001,
         )
 
         self.assertEqual(status, "ok")
@@ -36,35 +37,50 @@ class RegisterVisibleGraspModelSingleTests(unittest.TestCase):
         self.assertEqual(best["summary"]["name"], "best")
         self.assertEqual(quality["candidate"], "best")
 
-    def test_ambiguous_when_top_candidates_are_close(self) -> None:
+    def test_roll_equivalent_candidates_do_not_make_pose_ambiguous(self) -> None:
         status, best, quality = select_registration_candidate(
-            [self.ranked("a", 0.9, 0.006), self.ranked("b", 0.87, 0.007)],
+            [self.ranked("roll_0", 0.9, 0.006), self.ranked("roll_90", 0.9, 0.0061)],
             min_registration_fitness=0.35,
             max_inlier_rmse_m=0.012,
-            ambiguity_fitness_margin=0.05,
-            ambiguity_rmse_margin_m=0.003,
+        )
+
+        self.assertEqual(status, "ok")
+        self.assertIsNotNone(best)
+        self.assertEqual(quality["roll_equivalent_candidates"], 2)
+        self.assertTrue(quality["roll_about_grasp_x_ignored"])
+
+    def test_only_equal_opposite_axes_are_ambiguous(self) -> None:
+        status, _best, quality = select_registration_candidate(
+            [self.ranked("forward", 0.9, 0.006), self.ranked("reverse", 0.9, 0.006, -1.0)],
+            min_registration_fitness=0.35,
+            max_inlier_rmse_m=0.012,
         )
 
         self.assertEqual(status, "ambiguous")
-        self.assertIsNotNone(best)
+        self.assertEqual(quality["reason"], "registration_ambiguous_head_tail")
+
+    def test_better_directed_axis_is_accepted(self) -> None:
+        status, best, quality = select_registration_candidate(
+            [self.ranked("forward", 0.9, 0.006), self.ranked("reverse", 0.87, 0.007, -1.0)],
+            min_registration_fitness=0.35,
+            max_inlier_rmse_m=0.012,
+        )
+
+        self.assertEqual(status, "ok")
         assert best is not None
-        self.assertEqual(best["summary"]["name"], "a")
-        self.assertEqual(quality["reason"], "registration_ambiguous_pose")
+        self.assertEqual(best["summary"]["name"], "forward")
+        self.assertEqual(quality["opposite_axis_candidate"], "reverse")
 
     def test_quality_gates_reject_low_fitness_and_high_rmse(self) -> None:
         low_status, _best, low_quality = select_registration_candidate(
             [self.ranked("low", 0.2, 0.004)],
             min_registration_fitness=0.35,
             max_inlier_rmse_m=0.012,
-            ambiguity_fitness_margin=0.05,
-            ambiguity_rmse_margin_m=0.003,
         )
         high_status, _best, high_quality = select_registration_candidate(
             [self.ranked("high", 0.8, 0.02)],
             min_registration_fitness=0.35,
             max_inlier_rmse_m=0.012,
-            ambiguity_fitness_margin=0.05,
-            ambiguity_rmse_margin_m=0.003,
         )
 
         self.assertEqual(low_status, "failed")

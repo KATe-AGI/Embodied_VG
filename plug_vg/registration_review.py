@@ -146,6 +146,127 @@ def _points_json(points: np.ndarray, digits: int = 5) -> list[list[float]]:
     return rounded.tolist()
 
 
+def _cad_bbox_corners(model_points: np.ndarray, t_camera_grasp: np.ndarray | None) -> np.ndarray:
+    """Return the eight grasp-frame CAD AABB corners transformed into the camera frame."""
+
+    points = np.asarray(model_points, dtype=np.float64)
+    if t_camera_grasp is None or not len(points):
+        return np.empty((0, 3), dtype=np.float64)
+    lo = np.min(points, axis=0)
+    hi = np.max(points, axis=0)
+    corners_grasp = np.asarray(
+        [
+            [lo[0], lo[1], lo[2]],
+            [hi[0], lo[1], lo[2]],
+            [hi[0], hi[1], lo[2]],
+            [lo[0], hi[1], lo[2]],
+            [lo[0], lo[1], hi[2]],
+            [hi[0], lo[1], hi[2]],
+            [hi[0], hi[1], hi[2]],
+            [lo[0], hi[1], hi[2]],
+        ],
+        dtype=np.float64,
+    )
+    return transform_points(corners_grasp, t_camera_grasp)
+
+
+_QUALITY_KEYS = (
+    "candidate",
+    "fitness",
+    "inlier_rmse",
+    "coarse_candidate",
+    "coarse_fitness",
+    "coarse_rmse",
+    "roll_equivalent_candidates",
+    "directed_axis_groups",
+    "opposite_axis_candidate",
+    "opposite_axis_fitness",
+    "opposite_axis_inlier_rmse",
+    "opposite_axis_fitness_gap",
+    "opposite_axis_rmse_gap_m",
+    "reason",
+)
+
+
+def _registration_group(
+    visible_points: np.ndarray,
+    model_points: np.ndarray,
+    t_camera_grasp: np.ndarray | None,
+    semantic_camera: dict[str, list[float]] | None,
+    status: str,
+    reason: str | None,
+    quality: dict[str, Any],
+    seed: int,
+) -> dict[str, Any]:
+    visible_sample = _sample_points(visible_points, 12000, seed + 1)
+    model_sample = _sample_points(model_points, 16000, seed + 2)
+    model_registered = (
+        transform_points(model_sample, t_camera_grasp)
+        if t_camera_grasp is not None
+        else np.empty((0, 3), dtype=np.float64)
+    )
+    coarse_raw = quality.get("t_camera_grasp_coarse")
+    coarse_transform = None if coarse_raw is None else np.asarray(coarse_raw, dtype=np.float64)
+    if coarse_transform is not None and coarse_transform.shape != (4, 4):
+        coarse_transform = None
+    model_coarse = (
+        transform_points(model_sample, coarse_transform)
+        if coarse_transform is not None
+        else np.empty((0, 3), dtype=np.float64)
+    )
+    axes = None
+    if t_camera_grasp is not None:
+        axes = {
+            "x": _points_json([t_camera_grasp[:3, 0]], digits=6)[0],
+            "y": _points_json([t_camera_grasp[:3, 1]], digits=6)[0],
+            "z": _points_json([t_camera_grasp[:3, 2]], digits=6)[0],
+        }
+    return {
+        "status": status,
+        "reason": reason,
+        "quality": {key: quality.get(key) for key in _QUALITY_KEYS if key in quality},
+        "visible": _points_json(visible_sample),
+        "model": _points_json(model_registered),
+        "cad_bbox": _points_json(_cad_bbox_corners(model_points, t_camera_grasp), digits=6),
+        "coarse_model": _points_json(model_coarse),
+        "coarse_cad_bbox": _points_json(_cad_bbox_corners(model_points, coarse_transform), digits=6),
+        "semantic": semantic_camera or {},
+        "axes": axes,
+    }
+
+
+def write_registration_comparison_ply(
+    output_path: Path,
+    visible_points: np.ndarray,
+    model_points: np.ndarray,
+    t_camera_grasp: np.ndarray | None,
+) -> None:
+    """Write observed and registered model points as one colored camera-frame PLY."""
+
+    visible = np.asarray(visible_points, dtype=np.float64)
+    visible = visible[np.isfinite(visible).all(axis=1)]
+    model = np.asarray(model_points, dtype=np.float64)
+    model = model[np.isfinite(model).all(axis=1)]
+    registered = (
+        transform_points(model, np.asarray(t_camera_grasp, dtype=np.float64))
+        if t_camera_grasp is not None
+        else np.empty((0, 3), dtype=np.float64)
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="ascii") as stream:
+        stream.write("ply\nformat ascii 1.0\n")
+        stream.write("comment frame: camera_rgb; units: meter\n")
+        stream.write("comment green: D2RGB visible points; red: registered CAD points\n")
+        stream.write(f"element vertex {len(visible) + len(registered)}\n")
+        stream.write("property float x\nproperty float y\nproperty float z\n")
+        stream.write("property uchar red\nproperty uchar green\nproperty uchar blue\n")
+        stream.write("end_header\n")
+        for x, y, z in visible:
+            stream.write(f"{x:.9f} {y:.9f} {z:.9f} 18 183 106\n")
+        for x, y, z in registered:
+            stream.write(f"{x:.9f} {y:.9f} {z:.9f} 240 68 56\n")
+
+
 def write_interactive_review_html(
     output_path: Path,
     scene_points: np.ndarray,
@@ -161,13 +282,10 @@ def write_interactive_review_html(
     camera: dict[str, Any] | None = None,
 ) -> None:
     scene_sample = _sample_points(scene_points, 30000, seed)
-    visible_sample = _sample_points(visible_points, 12000, seed + 1)
-    if t_camera_grasp is not None:
-        model_registered = transform_points(_sample_points(model_points, 16000, seed + 2), t_camera_grasp)
-    else:
-        model_registered = np.empty((0, 3), dtype=np.float64)
     scene_color_sample = _sample_colors(scene_colors, len(scene_sample), len(scene_points), seed)
-    semantic = semantic_camera or {}
+    registration = _registration_group(
+        visible_points, model_points, t_camera_grasp, semantic_camera, status, reason, quality, seed
+    )
     camera_view = None
     if camera is not None and len(visible_points):
         frustum_source = np.asarray(scene_points if len(scene_points) else visible_points, dtype=np.float64)
@@ -204,34 +322,10 @@ def write_interactive_review_html(
             ],
         }
     view_data = {
-        "status": status,
-        "reason": reason,
-        "quality": {
-            key: quality.get(key)
-            for key in (
-                "candidate",
-                "fitness",
-                "inlier_rmse",
-                "second_candidate",
-                "candidate_fitness_gap",
-                "candidate_rmse_gap_m",
-                "reason",
-            )
-            if key in quality
-        },
         "scene": _points_json(scene_sample),
         "scene_colors": scene_color_sample,
-        "visible": _points_json(visible_sample),
-        "model": _points_json(model_registered),
-        "semantic": semantic,
         "camera": camera_view,
-        "axes": None
-        if t_camera_grasp is None
-        else {
-            "x": _points_json([t_camera_grasp[:3, 0]], digits=6)[0],
-            "y": _points_json([t_camera_grasp[:3, 1]], digits=6)[0],
-            "z": _points_json([t_camera_grasp[:3, 2]], digits=6)[0],
-        },
+        "registration": registration,
     }
     data_json = json.dumps(view_data, ensure_ascii=False, separators=(",", ":"))
     title = "Visible Grasp Registration 3D Review"
@@ -271,6 +365,7 @@ def write_interactive_review_html(
     padding: 7px 8px; font-size: 12px; cursor: pointer;
   }}
   button:hover {{ background: #f1f5f9; }}
+  button.active {{ background: #155eef; border-color: #155eef; color: #ffffff; }}
   .swatch {{ display: inline-block; width: 10px; height: 10px; margin-right: 7px; border-radius: 2px; }}
   .note {{ color: #667085; line-height: 1.42; }}
 </style>
@@ -281,8 +376,10 @@ def write_interactive_review_html(
   <h1>{escaped_title}</h1>
   <div class="legend">
     <div><span class="swatch" style="background:#94a3b8"></span>Full scene point cloud</div>
-    <div><span class="swatch" style="background:#12b76a"></span>YOLO visible plug points</div>
+    <div><span class="swatch" style="background:#12b76a"></span>Visible plug points</div>
     <div><span class="swatch" style="background:#f04438"></span>Registered CAD model points</div>
+    <div><span class="swatch" style="background:#7f56d9"></span>CAD oriented bounding box</div>
+    <div><span class="swatch" style="background:#06aed4"></span>Coarse PCA CAD model / box</div>
     <div><span class="swatch" style="background:#fdb022"></span>Camera frustum / RGB image plane</div>
     <div><span class="swatch" style="background:#d92d20"></span>+X tail->head</div>
     <div><span class="swatch" style="background:#079455"></span>+Y closing</div>
@@ -314,13 +411,15 @@ def write_interactive_review_html(
       <label><input id="layerScene" type="checkbox" checked> Scene</label>
       <label><input id="layerVisible" type="checkbox" checked> Visible</label>
       <label><input id="layerModel" type="checkbox" checked> CAD</label>
+      <label><input id="layerCadBox" type="checkbox" checked> CAD box</label>
+      <label><input id="layerCoarseCad" type="checkbox" checked> Coarse CAD</label>
       <label><input id="layerCamera" type="checkbox" checked> Camera</label>
       <label><input id="layerAxes" type="checkbox" checked> Axes</label>
       <label><input id="projectionMode" type="checkbox"> Perspective</label>
     </div>
   </div>
   <div id="info"></div>
-  <p class="note">Left-drag rotates, right-drag pans, wheel zooms. The registered CAD model is shown for review even when status is ambiguous; it is not an executable pose unless status is ok.</p>
+  <p class="note">Left-drag rotates, right-drag pans, and the wheel zooms.</p>
 </div>
 <script>
 const data = {data_json};
@@ -333,11 +432,15 @@ const ui = {{
   layerScene: document.getElementById("layerScene"),
   layerVisible: document.getElementById("layerVisible"),
   layerModel: document.getElementById("layerModel"),
+  layerCadBox: document.getElementById("layerCadBox"),
+  layerCoarseCad: document.getElementById("layerCoarseCad"),
   layerCamera: document.getElementById("layerCamera"),
   layerAxes: document.getElementById("layerAxes"),
   projectionMode: document.getElementById("projectionMode")
 }};
-const state = {{ yaw: -0.65, pitch: 0.55, zoom: 1, panX: 0, panY: 0, focusMode: "all", dragging: false, dragMode: "rotate", lastX: 0, lastY: 0 }};
+// Start in the RGB optical view.  The camera frame follows the image convention:
+// +X points right, +Y points down and +Z points forward into the scene.
+const state = {{ yaw: 0.0, pitch: 0.0, zoom: 1, panX: 0, panY: 0, focusMode: "all", dragging: false, dragMode: "rotate", lastX: 0, lastY: 0 }};
 const viewPresets = {{
   front: {{ yaw: 0.0, pitch: 0.0, zoom: 1.0 }},
   top: {{ yaw: 0.0, pitch: -1.5708, zoom: 1.0 }},
@@ -349,30 +452,38 @@ function setView(name) {{
   state.yaw = preset.yaw; state.pitch = preset.pitch; state.zoom = preset.zoom; state.panX = 0; state.panY = 0;
   draw();
 }}
+function activeGroup() {{ return data.registration; }}
 function setFocus(mode) {{ state.focusMode = mode; state.panX = 0; state.panY = 0; state.zoom = 1; draw(); }}
-function resetViewer() {{ state.focusMode = "all"; setView("iso"); ui.pointSize.value = "1"; ui.colorMode.value = "rgb"; for (const key of ["layerScene","layerVisible","layerModel","layerCamera","layerAxes"]) ui[key].checked = true; ui.projectionMode.checked = false; draw(); }}
+function resetViewer() {{ state.focusMode = "all"; state.panX = 0; state.panY = 0; state.zoom = 1; setView("front"); ui.pointSize.value = "1"; ui.colorMode.value = "rgb"; for (const key of ["layerScene","layerVisible","layerModel","layerCadBox","layerCoarseCad","layerCamera","layerAxes"]) ui[key].checked = true; ui.projectionMode.checked = false; fillInfo(); draw(); }}
 function row(k, v) {{ return `<div class="row"><div class="key">${{k}}</div><div class="value">${{v ?? "n/a"}}</div></div>`; }}
 function fmt(v, d=6) {{ return v === null || v === undefined || Number.isNaN(Number(v)) ? "n/a" : Number(v).toFixed(d); }}
 function fillInfo() {{
-  const q = data.quality || {{}};
+  const group = activeGroup(), q = group.quality || {{}};
   info.innerHTML = [
-    row("status", data.status),
-    row("reason", data.reason || q.reason || "n/a"),
+    row("status", group.status),
+    row("reason", group.reason || q.reason || "n/a"),
     row("candidate", q.candidate),
     row("fitness", fmt(q.fitness, 5)),
     row("rmse m", fmt(q.inlier_rmse, 6)),
-    row("second", q.second_candidate),
-    row("fitness gap", fmt(q.candidate_fitness_gap, 6)),
-    row("rmse gap", fmt(q.candidate_rmse_gap_m, 6)),
+    row("coarse candidate", q.coarse_candidate),
+    row("coarse fitness", fmt(q.coarse_fitness, 5)),
+    row("coarse rmse m", fmt(q.coarse_rmse, 6)),
+    row("roll-equivalent", q.roll_equivalent_candidates),
+    row("axis groups", q.directed_axis_groups),
+    row("opposite axis", q.opposite_axis_candidate),
+    row("opposite fitness", fmt(q.opposite_axis_fitness, 5)),
+    row("axis fitness gap", fmt(q.opposite_axis_fitness_gap, 6)),
+    row("axis rmse gap", fmt(q.opposite_axis_rmse_gap_m, 6)),
     row("scene pts", data.scene.length),
-    row("visible pts", data.visible.length),
-    row("model pts", data.model.length)
+    row("visible pts", group.visible.length),
+    row("model pts", group.model.length)
   ].join("");
 }}
-function allPoints() {{ return [...data.visible, ...data.model, ...data.scene.slice(0, Math.min(data.scene.length, 5000))]; }}
+function allPoints() {{ const group = activeGroup(); return [...group.visible, ...group.model, ...data.scene.slice(0, Math.min(data.scene.length, 5000))]; }}
 function focusPoints() {{
-  if (state.focusMode === "visible" && data.visible.length) return data.visible;
-  if (state.focusMode === "cad" && data.model.length) return data.model;
+  const group = activeGroup();
+  if (state.focusMode === "visible" && group.visible.length) return group.visible;
+  if (state.focusMode === "cad" && group.model.length) return group.model;
   return allPoints();
 }}
 function add(a,b) {{ return [a[0]+b[0], a[1]+b[1], a[2]+b[2]]; }}
@@ -404,7 +515,9 @@ function project(p, c, s) {{
   const v = view(p, c);
   let factor = 1.0;
   if (ui.projectionMode.checked) factor = 1.0 / Math.max(0.18, 1.0 + v[2] * 1.6);
-  return {{ x: canvas.width/2 + state.panX + v[0]*s*factor, y: canvas.height/2 + state.panY - v[1]*s*factor, z: v[2] }};
+  // Canvas Y and RGB pixel Y both grow downwards.  Keeping the positive sign
+  // makes Camera Front match the source RGB image instead of mirroring it.
+  return {{ x: canvas.width/2 + state.panX + v[0]*s*factor, y: canvas.height/2 + state.panY + v[1]*s*factor, z: v[2] }};
 }}
 function depthColor(z, lo, hi) {{
   const t = Math.max(0, Math.min(1, (z - lo) / Math.max(1e-6, hi - lo)));
@@ -468,6 +581,38 @@ function drawCameraFrustum(c, s) {{
   const center = mul(add(add(plane[0], plane[1]), add(plane[2], plane[3])), 0.25);
   drawLine(origin, center, c, s, "#f79009", "+Z camera view", 3);
 }}
+function drawCadBoundingBox(c, s) {{
+  const p = activeGroup().cad_bbox;
+  if (!p || p.length !== 8) return;
+  const edges = [
+    [0,1],[1,2],[2,3],[3,0],
+    [4,5],[5,6],[6,7],[7,4],
+    [0,4],[1,5],[2,6],[3,7]
+  ];
+  for (const [a,b] of edges) drawLine(p[a], p[b], c, s, "#7f56d9", "", 2.2);
+  const anchor = project(p[6], c, s);
+  ctx.fillStyle = "#6941c6";
+  ctx.font = "13px ui-monospace, monospace";
+  ctx.fillText("CAD bbox", anchor.x + 7, anchor.y - 7);
+}}
+function drawCoarseCad(c, s) {{
+  const group = activeGroup();
+  if (group.coarse_model && group.coarse_model.length) {{
+    drawPoints(group.coarse_model, c, s, "#06aed4", 1.0, 0.62, null, "solid");
+  }}
+  const p = group.coarse_cad_bbox;
+  if (!p || p.length !== 8) return;
+  const edges = [
+    [0,1],[1,2],[2,3],[3,0],
+    [4,5],[5,6],[6,7],[7,4],
+    [0,4],[1,5],[2,6],[3,7]
+  ];
+  for (const [a,b] of edges) drawLine(p[a], p[b], c, s, "#067a9c", "", 1.6);
+  const anchor = project(p[6], c, s);
+  ctx.fillStyle = "#067a9c";
+  ctx.font = "13px ui-monospace, monospace";
+  ctx.fillText("Coarse CAD", anchor.x + 7, anchor.y + 16);
+}}
 function drawScreenLine(a,b,color,label,width=3) {{
   ctx.strokeStyle = color; ctx.lineWidth = width;
   ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
@@ -491,32 +636,36 @@ function drawCameraGizmo() {{
   for (const axis of axes) {{
     const v = view(axis.vector, [0,0,0]);
     const n = Math.hypot(v[0], v[1]) || 1;
-    const end = {{ x: origin.x + v[0] / n * length, y: origin.y - v[1] / n * length }};
+    const end = {{ x: origin.x + v[0] / n * length, y: origin.y + v[1] / n * length }};
     drawScreenLine(origin, end, axis.color, axis.label, 3);
   }}
   ctx.fillStyle = "#111827"; ctx.beginPath(); ctx.arc(origin.x, origin.y, 3, 0, Math.PI*2); ctx.fill();
   ctx.restore();
 }}
-function semanticPoint(name) {{ return data.semantic ? data.semantic[name + "_camera_m"] : null; }}
+function semanticPoint(name) {{ const semantic = activeGroup().semantic; return semantic ? semantic[name + "_camera_m"] : null; }}
 function drawAxes(c, s) {{
+  const group = activeGroup();
   const o = semanticPoint("grasp_center");
-  if (!o || !data.axes) return;
+  if (!o || !group.axes) return;
   const length = 0.07;
   const tail = semanticPoint("tail_center"), head = semanticPoint("head_center");
   if (tail && head) drawLine(tail, head, c, s, "#d92d20", "tail->head", 4);
-  drawLine(o, add(o, mul(unit(data.axes.x), length)), c, s, "#d92d20", "+X", 3);
-  drawLine(o, add(o, mul(unit(data.axes.y), length)), c, s, "#079455", "+Y", 3);
-  drawLine(o, add(o, mul(unit(data.axes.z), length)), c, s, "#1570ef", "+Z", 3);
+  drawLine(o, add(o, mul(unit(group.axes.x), length)), c, s, "#d92d20", "+X", 3);
+  drawLine(o, add(o, mul(unit(group.axes.y), length)), c, s, "#079455", "+Y", 3);
+  drawLine(o, add(o, mul(unit(group.axes.z), length)), c, s, "#1570ef", "+Z", 3);
 }}
 function draw() {{
   const r = canvas.getBoundingClientRect();
   canvas.width = Math.max(1, Math.round(r.width)); canvas.height = Math.max(1, Math.round(r.height));
   ctx.clearRect(0,0,canvas.width,canvas.height);
+  const group = activeGroup();
   const c = center(), s = scale(c);
   if (ui.layerScene.checked) drawPoints(data.scene, c, s, "#94a3b8", 0.7, 0.18, data.scene_colors, ui.colorMode.value);
   if (ui.layerCamera.checked) drawCameraFrustum(c, s);
-  if (ui.layerVisible.checked) drawPoints(data.visible, c, s, "#12b76a", 1.4, 0.82, null, "solid");
-  if (ui.layerModel.checked) drawPoints(data.model, c, s, "#f04438", 1.2, 0.78, null, "solid");
+  if (ui.layerVisible.checked) drawPoints(group.visible, c, s, "#12b76a", 1.4, 0.82, null, "solid");
+  if (ui.layerCoarseCad.checked) drawCoarseCad(c, s);
+  if (ui.layerModel.checked) drawPoints(group.model, c, s, "#f04438", 1.2, 0.78, null, "solid");
+  if (ui.layerCadBox.checked) drawCadBoundingBox(c, s);
   if (ui.layerAxes.checked) drawAxes(c, s);
   drawCameraGizmo();
 }}
@@ -544,4 +693,11 @@ fillInfo(); draw();
     )
 
 
-__all__ = ["PointCloud", "PlyHeader", "parse_ply_header", "read_realsense_binary_ply", "write_interactive_review_html"]
+__all__ = [
+    "PointCloud",
+    "PlyHeader",
+    "parse_ply_header",
+    "read_realsense_binary_ply",
+    "write_interactive_review_html",
+    "write_registration_comparison_ply",
+]

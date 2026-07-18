@@ -1,0 +1,63 @@
+model_id: plugCAD
+source_step: plug_model/plugCAD.stp
+source_step_unit: millimeter
+asset_unit: meter
+frame: grasp
+downstream_transform_name: t_camera_grasp
+requires_manual_review: true
+assets:
+  mesh_obj: plug_model/plugCAD_grasp.obj
+  pointcloud_ply: plug_model/plugCAD_grasp.ply
+  review_report: plug_model/plugCAD_grasp_report.md
+  dimension_comparison: plug_model/2175B_vs_plugCAD_dimensions.png
+semantic_points_grasp_m:
+  grasp_center:
+  - 0.0
+  - 0.0
+  - 0.0
+  tail_center:
+  - -0.07988691
+  - 0.0
+  - 0.0
+  head_center:
+  - 0.09211309
+  - 0.0
+  - 0.0
+dimensions_m:
+  head_tail_axis_length: 0.172
+  tail_section_length: 0.032
+  tail_end_to_large_ring_near_edge: 0.118
+  large_ring_length: 0.021
+  large_ring_far_edge_to_head: 0.033
+coordinate_system:
+  origin: mapped_original_2175B_grasp_origin
+  x_axis: tail_to_head
+  y_axis: unchanged_from_2175B_gripper_closing_direction
+  z_axis: unchanged_from_2175B_approach_direction
+axial_adaptation:
+  method: piecewise_linear_tail_to_head_only
+  transverse_coordinates_unchanged: true
+  original_model: plug_model/2175B.stp
+  landmark_names:
+  - tail_end
+  - tail_section_end
+  - large_ring_near_edge
+  - large_ring_far_edge
+  - head_end
+  original_landmarks_from_tail_mm:
+  - 0.0
+  - 30.0
+  - 127.0
+  - 149.0
+  - 180.3
+  actual_landmarks_from_tail_mm:
+  - 0.0
+  - 32.0
+  - 118.0
+  - 139.0
+  - 172.0
+  interpretation: tail center means the center of the tail end face
+build:
+  tool: tools/build_actual_plug_cad.py
+  sample_points: 30000
+  seed: 0

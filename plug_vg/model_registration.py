@@ -64,8 +64,6 @@ def select_registration_candidate(
     ranked: list[dict[str, Any]],
     min_registration_fitness: float,
     max_inlier_rmse_m: float,
-    ambiguity_fitness_margin: float,
-    ambiguity_rmse_margin_m: float,
 ) -> tuple[str, dict[str, Any] | None, dict[str, Any]]:
     if not ranked:
         return "failed", None, {"reason": "registration_failed_no_candidate"}
@@ -84,15 +82,30 @@ def select_registration_candidate(
     if best["rmse"] > max_inlier_rmse_m:
         quality["reason"] = "registration_high_rmse"
         return "failed", None, quality
-    if len(ranked) > 1:
-        second = ranked[1]
-        fitness_gap = float(best["fitness"] - second["fitness"])
-        rmse_gap = float(second["rmse"] - best["rmse"])
-        quality["second_candidate"] = second["summary"]["name"]
-        quality["candidate_fitness_gap"] = round(fitness_gap, 8)
-        quality["candidate_rmse_gap_m"] = round(rmse_gap, 8)
-        if fitness_gap <= ambiguity_fitness_margin and abs(rmse_gap) <= ambiguity_rmse_margin_m:
-            quality["reason"] = "registration_ambiguous_pose"
+    # Roll about the plug's grasp-frame X axis does not change its collinear
+    # grasp/tail/head semantic points.  Treat all candidates with the same
+    # directed X axis as one grasp solution and only compare against the best
+    # head-tail-reversed solution.
+    best_axis = np.asarray(best["transform"], dtype=np.float64)[:3, 0]
+    same_axis = []
+    opposite_axis = []
+    for item in ranked:
+        axis = np.asarray(item["transform"], dtype=np.float64)[:3, 0]
+        (same_axis if float(np.dot(best_axis, axis)) >= 0.0 else opposite_axis).append(item)
+    quality["roll_equivalent_candidates"] = int(len(same_axis))
+    quality["directed_axis_groups"] = 1 + int(bool(opposite_axis))
+    quality["roll_about_grasp_x_ignored"] = True
+    if opposite_axis:
+        opposite = opposite_axis[0]
+        fitness_gap = float(best["fitness"] - opposite["fitness"])
+        rmse_gap = float(opposite["rmse"] - best["rmse"])
+        quality["opposite_axis_candidate"] = opposite["summary"]["name"]
+        quality["opposite_axis_fitness"] = round(float(opposite["fitness"]), 6)
+        quality["opposite_axis_inlier_rmse"] = round(float(opposite["rmse"]), 8)
+        quality["opposite_axis_fitness_gap"] = round(fitness_gap, 8)
+        quality["opposite_axis_rmse_gap_m"] = round(rmse_gap, 8)
+        if abs(fitness_gap) < 1e-6 and abs(rmse_gap) < 1e-6:
+            quality["reason"] = "registration_ambiguous_head_tail"
             return "ambiguous", best, quality
     return "ok", best, quality
 
@@ -146,8 +159,6 @@ def register_visible_points(
     max_scene_points: int,
     min_registration_fitness: float,
     max_inlier_rmse_m: float,
-    ambiguity_fitness_margin: float,
-    ambiguity_rmse_margin_m: float,
     seed: int,
 ) -> tuple[str, np.ndarray | None, dict[str, Any]]:
     try:
@@ -214,11 +225,15 @@ def register_visible_points(
         ranked,
         min_registration_fitness,
         max_inlier_rmse_m,
-        ambiguity_fitness_margin,
-        ambiguity_rmse_margin_m,
     )
     quality: dict[str, Any] = {
         **gate_quality,
+        "coarse_candidate": scored[0]["name"],
+        "coarse_fitness": round(float(scored[0]["coarse_fitness"]), 6),
+        "coarse_rmse": None
+        if not np.isfinite(scored[0]["coarse_rmse"])
+        else round(float(scored[0]["coarse_rmse"]), 8),
+        "t_camera_grasp_coarse": round_list(scored[0]["transform"]),
         "icp_threshold_m": float(icp_threshold_m),
         "voxel_size_m": float(voxel_size_m),
         "model_points_used": int(len(model_down)),

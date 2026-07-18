@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-from plug_vg.visible_points import extract_visible_points_from_mask, voxel_downsample
+from plug_vg.visible_points import extract_visible_points_from_mask, synthesize_scene_point_cloud, voxel_downsample
 
 
 class VisiblePointsTests(unittest.TestCase):
@@ -64,6 +64,24 @@ class VisiblePointsTests(unittest.TestCase):
         down = voxel_downsample(points, 0.01)
 
         self.assertEqual(down.shape, (2, 3))
+
+    def test_synthesize_colored_scene_point_cloud(self) -> None:
+        image = np.zeros((5, 5, 3), dtype=np.uint8)
+        image[2, 2] = [10, 20, 30]  # BGR
+        depth = np.zeros((5, 5), dtype=np.uint16)
+        depth[2, 2] = 1000
+
+        points, colors = synthesize_scene_point_cloud(image, depth, self.camera(), 0.1, 2.0)
+
+        np.testing.assert_allclose(points, [[0.0, 0.0, 1.0]])
+        np.testing.assert_allclose(colors, [[30 / 255.0, 20 / 255.0, 10 / 255.0]])
+
+    def test_scene_synthesis_rejects_unaligned_shapes(self) -> None:
+        image = np.zeros((5, 5, 3), dtype=np.uint8)
+        depth = np.zeros((4, 5), dtype=np.uint16)
+
+        with self.assertRaisesRegex(ValueError, "shapes must match"):
+            synthesize_scene_point_cloud(image, depth, self.camera(), 0.1, 2.0)
 
 
 if __name__ == "__main__":
