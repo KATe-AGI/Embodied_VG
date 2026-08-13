@@ -16,19 +16,28 @@ semantic_points_grasp_m:
   - 0.0
   - 0.0
   tail_center:
-  - -0.07988691
+  - -0.06701198
   - 0.0
   - 0.0
   head_center:
-  - 0.09211309
+  - 0.10078802
   - 0.0
   - 0.0
 dimensions_m:
-  head_tail_axis_length: 0.172
-  tail_section_length: 0.032
-  tail_end_to_large_ring_near_edge: 0.118
-  large_ring_length: 0.021
-  large_ring_far_edge_to_head: 0.033
+  head_tail_axis_length: 0.1678
+  tail_section_length: 0.0293
+  tail_end_to_large_ring_near_edge: 0.1105
+  large_ring_length: 0.023
+  large_ring_far_edge_to_head: 0.0343
+  axial_segments_s1_to_s8:
+  - 0.0293
+  - 0.001
+  - 0.0085
+  - 0.05
+  - 0.0217
+  - 0.023
+  - 0.0223
+  - 0.012
 coordinate_system:
   origin: mapped_original_2175B_grasp_origin
   x_axis: tail_to_head
@@ -40,22 +49,52 @@ axial_adaptation:
   original_model: plug_model/2175B.stp
   landmark_names:
   - tail_end
-  - tail_section_end
-  - large_ring_near_edge
-  - large_ring_far_edge
-  - head_end
+  - s1_end
+  - s2_end
+  - s3_end
+  - s4_end
+  - s5_end
+  - s6_end
+  - s7_end
+  - s8_end
   original_landmarks_from_tail_mm:
   - 0.0
-  - 30.0
-  - 127.0
-  - 149.0
+  - 29.3
+  - 47.3
+  - 55.8
+  - 105.8
+  - 127.5
+  - 148.5
+  - 170.8
   - 180.3
   actual_landmarks_from_tail_mm:
   - 0.0
-  - 32.0
-  - 118.0
-  - 139.0
-  - 172.0
+  - 29.3
+  - 30.3
+  - 38.8
+  - 88.8
+  - 110.5
+  - 133.5
+  - 155.8
+  - 167.8
+  original_segment_lengths_mm:
+  - 29.3
+  - 18.0
+  - 8.5
+  - 50.0
+  - 21.7
+  - 21.0
+  - 22.3
+  - 9.5
+  actual_segment_lengths_mm:
+  - 29.3
+  - 1.0
+  - 8.5
+  - 50.0
+  - 21.7
+  - 23.0
+  - 22.3
+  - 12.0
   interpretation: tail center means the center of the tail end face
 build:
   tool: tools/build_actual_plug_cad.py

@@ -8,14 +8,17 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 ULTRALYTICS_DIR = ROOT / "ultralytics"
-DATASET = ROOT / "plug_dataset_all_20260520"
-RGBD_TEST = DATASET / "rgbd_test"
-YOLO_DATASET = DATASET / "yolo_train"
+DATASET = ROOT / "yolo_plug_dataset"
+YOLO_DATASET = DATASET
+YOLO_VAL_IMAGES = YOLO_DATASET / "images" / "val"
+
+RGBD_DATASET = ROOT / "plug_dataset_all_20260529"
+RGBD_TEST = RGBD_DATASET / "rgbd_test"
 
 DEFAULT_CAMERA = ROOT / "configs" / "camera" / "plug_rgbd.yaml"
 DEFAULT_MANIFEST = RGBD_TEST / "meta" / "frame_manifest.csv"
 
-DEFAULT_SEG_WEIGHTS = ULTRALYTICS_DIR / "runs" / "segment" / "plug_yolo26s_seg_20260529-2" / "weights" / "best.pt"
+DEFAULT_SEG_WEIGHTS = ULTRALYTICS_DIR / "runs" / "segment" / "plug_yolo26n_seg_20260724" / "weights" / "best.pt"
 
 
 def load_camera(path: Path) -> dict[str, Any]:

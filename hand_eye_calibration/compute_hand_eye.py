@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-'''
-from https://github.com/RealManRobot/hand_eye_calibration
-'''
-"""Compute eye-in-hand or eye-to-hand calibration from manually collected data."""
+"""Compute eye-in-hand or eye-to-hand calibration from manually collected data.
+
+Adapted from https://github.com/RealManRobot/hand_eye_calibration
+"""
 
 from __future__ import annotations
 
@@ -32,6 +32,15 @@ METHODS = {
     "DANIILIDIS": cv2.CALIB_HAND_EYE_DANIILIDIS,
 }
 
+
+'''
+
+python hand_eye_calibration/compute_hand_eye.py \
+  --mode in-hand \
+  --data-dir hand_eye_calibration/eye_hand_data/calib_20260727 \
+  --config hand_eye_calibration/config.yaml \
+  --method TSAI
+'''
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
