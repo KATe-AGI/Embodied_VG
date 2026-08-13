@@ -51,23 +51,23 @@ r'''
 python infer_6d_single.py \
   --rgb test_20260701/20260701_155018_359_color.png \
   --d2rgb test_20260701/20260701_155018_359_d2rgb.npy \
-  --robot-pose -0.712547 0.000064 0.581025 -2.279 0.216 1.488 \
-  --output-dir output/plug_6d_single \
+  --robot-pose -0.014293 0.460711 0.742759 2.167158 0.044541 -3.126827 \
+  --output-dir output/test_0813 \
   --save-ply \
   --save-review
 
 # Windows PowerShell
-python .\infer_6d_single.py `
-  --rgb .\test_20260701\20260701_155018_359_color.png `
-  --d2rgb .\test_20260701\20260701_155018_359_d2rgb.npy `
-  --robot-pose -0.712547 0.000064 0.581025 -2.279 0.216 1.488 `
-  --output-dir .\output\plug_6d_single `
+python infer_6d_single.py `
+  --rgb test_20260701\20260701_155018_359_color.png `
+  --d2rgb test_20260701\20260701_155018_359_d2rgb.npy `
+  --robot-pose -0.014293 0.460711 0.742759 2.167158 0.044541 -3.126827 `
+  --output-dir output\plug_6d_single `
   --save-ply `
   --save-review
 '''
 
 DEFAULT_OUTPUT = ROOT / "ultralytics" / "runs" / "plug_6d_single"
-DEFAULT_HAND_EYE = ROOT / "hand_eye_calibration" / "eye_hand_data" / "calib_20260618" / "hand_eye_result_in-hand.yaml"
+DEFAULT_HAND_EYE = ROOT / "hand_eye_calibration" / "eye_hand_data" / "calib_20260812_PARK" / "hand_eye_result_in-hand.yaml"
 DEFAULT_ROBOT_CONFIG = ROOT / "configs" / "robot" / "cs_robot.yaml"
 
 
@@ -308,6 +308,17 @@ def print_result(result: dict[str, Any], output_path: Path) -> None:
     if warnings:
         print(f"warnings: {warnings}")
     print(f"json: {output_path}")
+    gpu_memory = result.get("gpu_memory") or {}
+    if gpu_memory.get("status") == "ok":
+        for device in gpu_memory.get("devices") or []:
+            print(
+                "GPU peak memory: "
+                f"{device.get('name')} ({device.get('device')}) = "
+                f"allocated {device.get('peak_allocated_mib')} MiB, "
+                f"reserved {device.get('peak_reserved_mib')} MiB"
+            )
+    else:
+        print(f"GPU peak memory: unavailable ({gpu_memory.get('reason', 'not_collected')})")
     timing = result.get("timing") or {}
     if timing:
         core = (
@@ -341,29 +352,118 @@ def _finalize_timing(timing: dict[str, float], t0: float) -> dict[str, float]:
     return timing
 
 
+def _cuda_device_indices(device_arg: Any, torch_module: Any) -> list[int]:
+    """Resolve the Ultralytics device argument to logical CUDA device indices."""
+
+    if not torch_module.cuda.is_available():
+        return []
+    if device_arg is None:
+        return [int(torch_module.cuda.current_device())]
+    value = str(device_arg).strip().lower()
+    if value in {"cpu", "mps"}:
+        return []
+    if value.startswith("cuda:"):
+        value = value.split(":", 1)[1]
+    indices: list[int] = []
+    for token in value.split(","):
+        token = token.strip()
+        if token.isdigit():
+            indices.append(int(token))
+    return sorted(set(indices)) or [int(torch_module.cuda.current_device())]
+
+
+def _start_gpu_memory_monitor(device_arg: Any) -> dict[str, Any]:
+    """Reset CUDA peaks before model loading; failures never block inference."""
+
+    try:
+        import torch
+    except Exception as exc:  # pragma: no cover - depends on the runtime installation
+        return {"status": "unavailable", "reason": f"torch_import_failed:{type(exc).__name__}"}
+
+    try:
+        indices = _cuda_device_indices(device_arg, torch)
+        if not indices:
+            reason = "cuda_not_available" if not torch.cuda.is_available() else "cpu_device_selected"
+            return {"status": "unavailable", "reason": reason}
+        device_count = int(torch.cuda.device_count())
+        invalid = [index for index in indices if index < 0 or index >= device_count]
+        if invalid:
+            return {"status": "unavailable", "reason": f"invalid_cuda_devices:{invalid}"}
+        for index in indices:
+            torch.cuda.reset_peak_memory_stats(index)
+        return {"status": "active", "torch": torch, "indices": indices}
+    except Exception as exc:  # pragma: no cover - hardware/runtime dependent
+        return {"status": "unavailable", "reason": f"cuda_monitor_start_failed:{type(exc).__name__}"}
+
+
+def _finish_gpu_memory_monitor(monitor: dict[str, Any]) -> dict[str, Any]:
+    """Synchronize and read CUDA peaks. This call is intentionally timed as other."""
+
+    if monitor.get("status") != "active":
+        return {"status": "unavailable", "reason": monitor.get("reason", "not_active")}
+    torch = monitor["torch"]
+    try:
+        devices = []
+        for index in monitor["indices"]:
+            torch.cuda.synchronize(index)
+            allocated = int(torch.cuda.max_memory_allocated(index))
+            reserved = int(torch.cuda.max_memory_reserved(index))
+            devices.append(
+                {
+                    "device": f"cuda:{index}",
+                    "name": str(torch.cuda.get_device_name(index)),
+                    "peak_allocated_bytes": allocated,
+                    "peak_allocated_mib": round(allocated / (1024.0**2), 2),
+                    "peak_reserved_bytes": reserved,
+                    "peak_reserved_mib": round(reserved / (1024.0**2), 2),
+                }
+            )
+        return {"status": "ok", "devices": devices}
+    except Exception as exc:  # pragma: no cover - hardware/runtime dependent
+        return {"status": "unavailable", "reason": f"cuda_monitor_finish_failed:{type(exc).__name__}"}
+
+
+def _finalize_runtime(
+    result: dict[str, Any],
+    timing: dict[str, float],
+    t0: float,
+    gpu_monitor: dict[str, Any],
+) -> None:
+    """Attach memory and timing summaries, charging monitor overhead to other."""
+
+    result["gpu_memory"] = _finish_gpu_memory_monitor(gpu_monitor)
+    result["timing"] = _finalize_timing(timing, t0)
+
+
 def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
     t0 = time.perf_counter()
+    timing: dict[str, float] = {}
+    gpu_monitor = _start_gpu_memory_monitor(args.device)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_json_path(args.output_dir, args.rgb)
     artifacts: dict[str, str] = {}
 
     if not args.rgb.is_file():
         result = make_failure(args, "rgb_missing")
+        _finalize_runtime(result, timing, t0, gpu_monitor)
         write_json(json_path, result)
         return result, json_path
     if not args.d2rgb.is_file():
         result = make_failure(args, "d2rgb_missing")
+        _finalize_runtime(result, timing, t0, gpu_monitor)
         write_json(json_path, result)
         return result, json_path
 
     image = cv2.imread(str(args.rgb))
     if image is None:
         result = make_failure(args, "rgb_unreadable")
+        _finalize_runtime(result, timing, t0, gpu_monitor)
         write_json(json_path, result)
         return result, json_path
     depth = read_depth_raw(args.d2rgb)
     if depth is None:
         result = make_failure(args, "d2rgb_unreadable")
+        _finalize_runtime(result, timing, t0, gpu_monitor)
         write_json(json_path, result)
         return result, json_path
 
@@ -374,7 +474,7 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
 
     stage_t0 = time.perf_counter()
     seg_model = YOLO(str(args.seg_weights))
-    timing = {"model_load_s": round(time.perf_counter() - stage_t0, 6)}
+    timing["model_load_s"] = round(time.perf_counter() - stage_t0, 6)
     stage_t0 = time.perf_counter()
     seg_items = run_segmentation(image, seg_model, args)
     seg_item = choose_segmentation(seg_items)
@@ -387,9 +487,9 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
             {
                 "stage1_segmentation": stage1_segmentation,
                 "artifacts": artifacts,
-                "timing": _finalize_timing(timing, t0),
             }
         )
+        _finalize_runtime(result, timing, t0, gpu_monitor)
         write_json(json_path, result)
         return result, json_path
 
@@ -422,8 +522,8 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
             "stage1_segmentation": stage1_segmentation,
             "visible_point_cloud": _visible_summary(extraction),
             "artifacts": artifacts,
-            "timing": _finalize_timing(timing, t0),
         })
+        _finalize_runtime(result, timing, t0, gpu_monitor)
         write_json(json_path, result)
         return result, json_path
 
@@ -475,12 +575,12 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
         "timing": timing,
     }
     if reg_status != "ok" or t_camera_grasp is None or semantic_camera_points is None:
-        _finalize_timing(timing, t0)
         result = {
             "status": reg_status,
             "reason": registration_quality.get("reason", "registration_failed"),
             **common,
         }
+        _finalize_runtime(result, timing, t0, gpu_monitor)
         write_json(json_path, result)
         return result, json_path
 
@@ -510,7 +610,7 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
     }
     result = convert_camera_grasp_to_base(result, t_base_end, t_end_camera, args.hand_eye_config, args.robot_config)
     timing["coordinate_transform_s"] = round(time.perf_counter() - stage_t0, 6)
-    _finalize_timing(timing, t0)
+    _finalize_runtime(result, timing, t0, gpu_monitor)
     write_json(json_path, result)
     return result, json_path
 

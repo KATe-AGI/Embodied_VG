@@ -21,6 +21,7 @@ Thumbs.db
 # Datasets and collected sensor data
 plug_dataset_all_20260520/
 plug_dataset_all_20260529/
+plug_reannotation_20260716/
 yolo_plug_dataset/
 extra/
 test_*/

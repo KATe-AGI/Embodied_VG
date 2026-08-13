@@ -18,11 +18,11 @@ if str(ULTRALYTICS_DIR) not in sys.path:
 from ultralytics import YOLO  # noqa: E402
 
 
-DATASET = ROOT / "plug_dataset_all_20260529" / "yolo_train"
-DEFAULT_MODEL = ULTRALYTICS_DIR / "yolo26s-seg.pt"
-DEFAULT_DATA = DATASET / "seg" / "plug_seg.yaml"
+DATASET = ROOT / "yolo_plug_dataset"
+DEFAULT_MODEL = ULTRALYTICS_DIR / "yolo26n-seg.pt"
+DEFAULT_DATA = DATASET / "data.yaml"
 DEFAULT_PROJECT = ULTRALYTICS_DIR / "runs" / "segment"
-DEFAULT_NAME = "plug_yolo26s_seg_20260529"
+DEFAULT_NAME = "plug_yolo26n_seg_20260724"
 
 
 def absolute_data_yaml(path: Path) -> Path:
@@ -47,7 +47,7 @@ def absolute_data_yaml(path: Path) -> Path:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--imgsz", type=int, default=640, help="Training image size.")
-    parser.add_argument("--epochs", type=int, default=60, help="Number of epochs.")
+    parser.add_argument("--epochs", type=int, default=100, help="Number of epochs.")
     parser.add_argument("--batch", type=int, default=32, help="Batch size. Use 4 if GPU memory is insufficient.")
     parser.add_argument("--patience", type=int, default=10, help="Early-stopping patience.")
     parser.add_argument("--workers", type=int, default=8, help="Dataloader workers.")

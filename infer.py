@@ -10,7 +10,7 @@ from pathlib import Path
 
 import cv2
 
-from plug_vg.config import DEFAULT_SEG_WEIGHTS, RGBD_TEST, ULTRALYTICS_DIR, YOLO_DATASET
+from plug_vg.config import DEFAULT_SEG_WEIGHTS, RGBD_TEST, ULTRALYTICS_DIR, YOLO_VAL_IMAGES
 from plug_vg.io import collect_sources
 from plug_vg.vision import draw_overlay, run_segmentation
 
@@ -23,7 +23,7 @@ from ultralytics import YOLO  # noqa: E402
 
 SOURCE_PRESETS = {
     "rgbd-test": RGBD_TEST / "color",
-    "seg-val": YOLO_DATASET / "seg" / "images" / "val",
+    "seg-val": YOLO_VAL_IMAGES,
 }
 DEFAULT_SOURCE_PRESET = "rgbd-test"
 DEFAULT_OUTPUT = ULTRALYTICS_DIR / "runs" / "plug_stage1_seg_debug"

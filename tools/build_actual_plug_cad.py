@@ -33,10 +33,12 @@ ACTUAL_REPORT = ROOT / "plug_model" / "plugCAD_grasp_report.md"
 COMPARISON_IMAGE = ROOT / "plug_model" / "2175B_vs_plugCAD_dimensions.png"
 COMPARISON_SVG = ROOT / "plug_model" / "2175B_vs_plugCAD_dimensions.svg"
 
-# Coordinates are distances from the tail end along the tail->head axis.
-# Original landmarks were identified from the original CAD axial profile.
-ORIGINAL_LANDMARKS_MM = np.asarray([0.0, 30.0, 127.0, 149.0, 180.3], dtype=np.float64)
-ACTUAL_LANDMARKS_MM = np.asarray([0.0, 32.0, 118.0, 139.0, 172.0], dtype=np.float64)
+# Coordinates are distances from the tail end along the tail->head axis.  S1-S8
+# are the major external axial sections identified from the original STEP.
+ORIGINAL_SEGMENTS_MM = np.asarray([29.3, 18.0, 8.5, 50.0, 21.7, 21.0, 22.3, 9.5], dtype=np.float64)
+ACTUAL_SEGMENTS_MM = np.asarray([29.3, 1.0, 8.5, 50.0, 21.7, 23.0, 22.3, 12.0], dtype=np.float64)
+ORIGINAL_LANDMARKS_MM = np.concatenate(([0.0], np.cumsum(ORIGINAL_SEGMENTS_MM)))
+ACTUAL_LANDMARKS_MM = np.concatenate(([0.0], np.cumsum(ACTUAL_SEGMENTS_MM)))
 
 
 def axial_map_mm(values: np.ndarray | float) -> np.ndarray:
@@ -124,7 +126,9 @@ def build_actual_step(source_path: Path, output_path: Path) -> None:
     if len(cq.Workplane(obj=check).solids().vals()) != 1:
         raise RuntimeError("generated plugCAD STEP is not one solid")
     if not np.isclose(check_bbox.zlen, ACTUAL_LANDMARKS_MM[-1], atol=1e-4):
-        raise RuntimeError(f"generated STEP length is {check_bbox.zlen}, expected 172 mm")
+        raise RuntimeError(
+            f"generated STEP length is {check_bbox.zlen}, expected {ACTUAL_LANDMARKS_MM[-1]:.6f} mm"
+        )
 
 
 def _relative(path: Path) -> str:
@@ -154,11 +158,12 @@ def write_actual_config(actual_grasp_u_mm: float) -> None:
             "head_center": [round(head_m, 8), 0.0, 0.0],
         },
         "dimensions_m": {
-            "head_tail_axis_length": 0.172,
-            "tail_section_length": 0.032,
-            "tail_end_to_large_ring_near_edge": 0.118,
-            "large_ring_length": 0.021,
-            "large_ring_far_edge_to_head": 0.033,
+            "head_tail_axis_length": float(ACTUAL_LANDMARKS_MM[-1] * 0.001),
+            "tail_section_length": float(ACTUAL_SEGMENTS_MM[0] * 0.001),
+            "tail_end_to_large_ring_near_edge": float(ACTUAL_LANDMARKS_MM[5] * 0.001),
+            "large_ring_length": float(ACTUAL_SEGMENTS_MM[5] * 0.001),
+            "large_ring_far_edge_to_head": float(np.sum(ACTUAL_SEGMENTS_MM[6:]) * 0.001),
+            "axial_segments_s1_to_s8": [float(value * 0.001) for value in ACTUAL_SEGMENTS_MM],
         },
         "coordinate_system": {
             "origin": "mapped_original_2175B_grasp_origin",
@@ -170,9 +175,11 @@ def write_actual_config(actual_grasp_u_mm: float) -> None:
             "method": "piecewise_linear_tail_to_head_only",
             "transverse_coordinates_unchanged": True,
             "original_model": _relative(ORIGINAL_STEP),
-            "landmark_names": ["tail_end", "tail_section_end", "large_ring_near_edge", "large_ring_far_edge", "head_end"],
+            "landmark_names": ["tail_end", *[f"s{index}_end" for index in range(1, 9)]],
             "original_landmarks_from_tail_mm": ORIGINAL_LANDMARKS_MM.tolist(),
             "actual_landmarks_from_tail_mm": ACTUAL_LANDMARKS_MM.tolist(),
+            "original_segment_lengths_mm": ORIGINAL_SEGMENTS_MM.tolist(),
+            "actual_segment_lengths_mm": ACTUAL_SEGMENTS_MM.tolist(),
             "interpretation": "tail center means the center of the tail end face",
         },
         "build": {
@@ -202,11 +209,12 @@ def write_report(actual_grasp_u_mm: float) -> None:
         "## Measurement Interpretation",
         "- All dimensions are projections onto the plug center axis.",
         "- `tail center` is interpreted as the center of the tail end face.",
-        "- Tail section length: `32.0 mm`.",
-        "- Tail end center to large-ring near edge: `118.0 mm`.",
-        "- Large-ring axial length: `21.0 mm`.",
-        "- Overall length: `172.0 mm`.",
-        "- Implied large-ring far edge to head: `33.0 mm`.",
+        f"- S1-S8 lengths, mm: `{ACTUAL_SEGMENTS_MM.tolist()}`.",
+        f"- Tail section (S1) length: `{ACTUAL_SEGMENTS_MM[0]:.1f} mm`.",
+        f"- Tail end to large-ring near edge (S1-S5): `{ACTUAL_LANDMARKS_MM[5]:.1f} mm`.",
+        f"- Large-ring axial length (S6): `{ACTUAL_SEGMENTS_MM[5]:.1f} mm`.",
+        f"- Overall length: `{ACTUAL_LANDMARKS_MM[-1]:.1f} mm`.",
+        f"- Large-ring far edge to head (S7+S8): `{np.sum(ACTUAL_SEGMENTS_MM[6:]):.1f} mm`.",
         "",
         "## Axial Mapping",
         f"- Original landmarks from tail, mm: `{ORIGINAL_LANDMARKS_MM.tolist()}`",
@@ -216,9 +224,9 @@ def write_report(actual_grasp_u_mm: float) -> None:
         f"- Mapped grasp origin from tail: `{actual_grasp_u_mm:.6f} mm`.",
         "",
         "## Manual Review",
-        "- Confirm that the 32 mm tail boundary is the first major shoulder shown in the comparison image.",
+        "- Confirm that S2 is intentionally axially compressed from 18.0 mm to 1.0 mm.",
         "- Confirm that tail center refers to the tail end-face center, as interpreted above.",
-        "- Confirm that the large ring is bounded by the annotated 118 mm and 139 mm landmarks.",
+        f"- Confirm that the large ring (S6) is bounded by {ACTUAL_LANDMARKS_MM[5]:.1f} mm and {ACTUAL_LANDMARKS_MM[6]:.1f} mm.",
         "",
     ]
     ACTUAL_REPORT.write_text("\n".join(lines), encoding="utf-8")
@@ -237,29 +245,104 @@ def write_comparison_image(original_m: np.ndarray, actual_m: np.ndarray) -> None
     original_u = original_mm[:, 0] - np.min(original_mm[:, 0])
     actual_u = actual_mm[:, 0] - np.min(actual_mm[:, 0])
 
-    fig, ax = plt.subplots(figsize=(16, 9))
-    ax.scatter(original_u, original_mm[:, 1] + 115.0, s=0.35, color="#667085", alpha=0.22, rasterized=True)
-    ax.scatter(actual_u, actual_mm[:, 1], s=0.35, color="#1570ef", alpha=0.25, rasterized=True)
-    ax.text(0.0, 169.0, "2175B original CAD (180.3 mm)", fontsize=13, weight="bold", color="#344054")
-    ax.text(0.0, 58.0, "plugCAD measured model (172.0 mm)", fontsize=13, weight="bold", color="#175cd3")
+    colors = ["#067647", "#b54708", "#b42318", "#6941c6", "#175cd3", "#c11574", "#026aa2", "#475467"]
 
-    for value in ACTUAL_LANDMARKS_MM:
-        ax.axvline(value, ymin=0.04, ymax=0.48, color="#84adff", lw=0.8, ls="--")
+    def draw_side_panel(
+        ax,
+        u_mm: np.ndarray,
+        transverse_mm: np.ndarray,
+        landmarks_mm: np.ndarray,
+        segments_mm: np.ndarray,
+        title: str,
+        point_color: str,
+        overall_color: str,
+    ) -> None:
+        ax.scatter(u_mm, transverse_mm, s=0.32, color=point_color, alpha=0.28, rasterized=True)
+        for value in landmarks_mm:
+            ax.axvline(value, ymin=0.04, ymax=0.84, color=overall_color, lw=0.75, ls="--", alpha=0.55)
+        for index, (start, end, length, color) in enumerate(
+            zip(landmarks_mm[:-1], landmarks_mm[1:], segments_mm, colors)
+        ):
+            y = -50.0 - 8.0 * (index % 4)
+            draw_dimension(ax, float(start), float(end), y, f"S{index + 1} {length:g} mm", color)
+        draw_dimension(
+            ax,
+            0.0,
+            float(landmarks_mm[-1]),
+            53.0,
+            f"overall {landmarks_mm[-1]:.1f} mm",
+            overall_color,
+        )
+        ax.set_xlim(-6.0, 187.0)
+        ax.set_ylim(-82.0, 61.0)
+        ax.set_ylabel("Transverse (mm)")
+        ax.set_title(title, fontsize=13, weight="bold", color=overall_color, loc="left")
+        ax.grid(True, color="#eaecf0", lw=0.65)
+        ax.set_aspect("equal", adjustable="box")
+        ax.set_anchor("C")
 
-    draw_dimension(ax, 0.0, 32.0, -55.0, "tail section 32 mm", "#067647")
-    draw_dimension(ax, 0.0, 118.0, -66.0, "tail end center to ring near edge 118 mm", "#b54708")
-    draw_dimension(ax, 118.0, 139.0, -77.0, "large ring 21 mm", "#b42318")
-    draw_dimension(ax, 139.0, 172.0, -88.0, "head remainder 33 mm", "#6941c6")
-    draw_dimension(ax, 0.0, 172.0, -99.0, "overall 172 mm", "#175cd3")
+    def draw_end_panel(ax, vertices_mm: np.ndarray, title: str, color: str) -> None:
+        y_mm = vertices_mm[:, 1]
+        z_mm = vertices_mm[:, 2]
+        ax.scatter(y_mm, z_mm, s=0.32, color=color, alpha=0.28, rasterized=True)
+        draw_dimension(ax, (-47.0), 47.0, -53.0, "94.0 mm", color)
+        ax.annotate("", xy=(53.0, 47.0), xytext=(53.0, -47.0), arrowprops={"arrowstyle": "<->", "color": color, "lw": 1.5})
+        ax.text(55.0, 0.0, "94.0 mm", color=color, ha="left", va="center", rotation=90, fontsize=9)
+        ax.plot([-47.0, -47.0], [-50.0, -55.0], color=color, lw=0.8)
+        ax.plot([47.0, 47.0], [-50.0, -55.0], color=color, lw=0.8)
+        ax.plot([50.0, 55.0], [-47.0, -47.0], color=color, lw=0.8)
+        ax.plot([50.0, 55.0], [47.0, 47.0], color=color, lw=0.8)
+        ax.set_xlim(-60.0, 63.0)
+        ax.set_ylim(-60.0, 60.0)
+        ax.set_aspect("equal", adjustable="box")
+        ax.set_title(title, fontsize=12, weight="bold", color=color)
+        ax.set_xlabel("Y (mm)")
+        ax.set_ylabel("Z (mm)")
+        ax.grid(True, color="#eaecf0", lw=0.65)
+        ax.set_anchor("C")
 
-    ax.set_xlim(-6.0, 187.0)
-    ax.set_ylim(-108.0, 174.0)
-    ax.set_xlabel("Distance from tail end along center axis (mm)")
-    ax.set_ylabel("Side projection; transverse dimensions unchanged (mm)")
-    ax.set_title("2175B original CAD vs plugCAD measured axial adaptation", fontsize=15)
-    ax.grid(True, color="#eaecf0", lw=0.7)
-    ax.set_aspect("equal", adjustable="box")
-    fig.tight_layout()
+    fig = plt.figure(figsize=(16, 13))
+    grid = fig.add_gridspec(2, 2, width_ratios=[1.42, 1.0], hspace=0.30, wspace=0.22)
+    original_side = fig.add_subplot(grid[0, 0])
+    actual_side = fig.add_subplot(grid[1, 0])
+    original_end = fig.add_subplot(grid[0, 1])
+    actual_end = fig.add_subplot(grid[1, 1])
+
+    draw_side_panel(
+        original_side,
+        original_u,
+        original_mm[:, 1],
+        ORIGINAL_LANDMARKS_MM,
+        ORIGINAL_SEGMENTS_MM,
+        "2175B original CAD | axial S1-S8",
+        "#667085",
+        "#344054",
+    )
+    draw_side_panel(
+        actual_side,
+        actual_u,
+        actual_mm[:, 1],
+        ACTUAL_LANDMARKS_MM,
+        ACTUAL_SEGMENTS_MM,
+        "plugCAD corrected CAD | axial S1-S8",
+        "#1570ef",
+        "#175cd3",
+    )
+    original_side.set_xlabel("Distance from tail end along center axis (mm)")
+    actual_side.set_xlabel("Distance from tail end along center axis (mm)")
+    draw_end_panel(original_end, original_mm, "2175B end-view envelope", "#667085")
+    draw_end_panel(actual_end, actual_mm, "plugCAD end-view envelope", "#1570ef")
+
+    fig.suptitle("2175B original CAD vs plugCAD corrected dimensions", fontsize=18, weight="bold", y=0.965)
+    fig.text(
+        0.5,
+        0.025,
+        "End-view envelopes remain identical because only the axial coordinate is adapted.",
+        ha="center",
+        fontsize=10,
+        color="#475467",
+    )
+    fig.subplots_adjust(top=0.91, bottom=0.07, left=0.06, right=0.955)
     fig.savefig(COMPARISON_IMAGE, dpi=220)
     fig.savefig(COMPARISON_SVG)
     plt.close(fig)
