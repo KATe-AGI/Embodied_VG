@@ -37,6 +37,10 @@ class ActualPlugCadTests(unittest.TestCase):
         model = load_grasp_model()
         self.assertEqual(model.config["model_id"], "plugCAD")
         self.assertAlmostEqual(model.config["dimensions_m"]["head_tail_axis_length"], 0.1678, places=8)
+        self.assertIsNotNone(model.normals_grasp)
+        assert model.normals_grasp is not None
+        self.assertEqual(model.normals_grasp.shape, model.points_grasp_m.shape)
+        np.testing.assert_allclose(np.linalg.norm(model.normals_grasp, axis=1), 1.0, atol=1e-7)
 
         with DEFAULT_GRASP_MODEL_CONFIG.open("r", encoding="utf-8") as stream:
             config = yaml.safe_load(stream)

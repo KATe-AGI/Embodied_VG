@@ -5,9 +5,9 @@ EmbodiedVG 是插头抓取的视觉侧工程。当前主线使用 YOLO 分割可
 ## 当前主线
 
 ```text
-RGB 图像 ──YOLO-seg──> 可见插头掩膜
+RGB 图像 ──YOLO-seg──> 可见插头掩膜 ──边界腐蚀──> 深度掩膜
                             │
-D2RGB 深度 ──掩膜反投影──> 相机系可见点云
+D2RGB 深度 ──范围门控/全局 MAD/反投影/质心体素──> 相机系可见点云
                             │
 plugCAD 抓取系点云 ─PCA/ICP──> T_camera_grasp
                             │
@@ -146,10 +146,14 @@ PowerShell 的换行符是反引号 `` ` ``，反引号后不要再放空格。
 常用参数：
 
 - `--device 0` 指定 CUDA GPU，`--device cpu` 强制 CPU；
+- `--mask-erosion-px` 控制深度反投影前的掩膜内缩半径，默认 `5` 像素；
+- `--mad-z-threshold` 控制直通滤波后的全局相机 Z 轴 MAD 阈值，默认 `3.5`；
 - `--save-overlay` 保存可见掩膜叠加图；
 - `--save-ply` 保存可见插头点云；
 - `--save-review` 保存掩膜、可见点云、RGB 语义点投影、交互 HTML 和点云对比 PLY；
 - `--min-registration-fitness` 和 `--max-inlier-rmse` 控制当前 ICP 质量门。
+
+当前观测点预处理采用“绝对深度直通滤波 + 全局相机 Z 轴 MAD”：掩膜默认向内腐蚀 5 像素，先保留绝对深度范围内的点，再以 `median(Z) ± 3.5 × 1.4826 × MAD(Z)` 剔除全局深度异常点，随后只进行一次 4 mm 体素质心降采样。配准入口不再执行 Open3D 统计离群过滤，也不重复体素化场景点云。
 
 ## 输出产物
 
@@ -162,7 +166,7 @@ PowerShell 的换行符是反引号 `` ` ``，反引号后不要再放空格。
 | `<sample>_color_visible_points.ply` | `--save-ply` 或 `--save-review` | RGB 相机系下的目标可见点云（仅 XYZ） |
 | `<sample>_color_rgb_projection.jpg` | `--save-review` 且存在候选变换 | 掩膜与 tail/grasp/head 的 RGB 投影 |
 | `<sample>_color_registration_review.html` | `--save-review` | 全场景、可见点、CAD、包围盒、相机视锥与抓取轴的交互复核 |
-| `<sample>_color_point_cloud_comparison.ply` | `--save-review` | RGB 相机系下的对比点云：绿色为 D2RGB 观测，红色为已配准 CAD |
+| `<sample>_color_point_cloud_comparison.ply` | `--save-review` | RGB 相机系下的对比点云：绿色为 D2RGB 观测，红色为已配准 CAD；黄色、青色、紫色点球分别标记抓取中心、尾部中心、头部中心 |
 
 PLY 只保存点和颜色，不能控制 IDE 插件的拖拽、坐标轴、背景或小窗口。使用 `kleinicke.ply-visualizer` 时，拖拽时出现的坐标轴原点是插件的当前旋转中心，不是 CAD 抓取原点；按 `W` 可将旋转中心设为 PLY 世界原点，按 `A` 切换坐标轴常驻显示。
 

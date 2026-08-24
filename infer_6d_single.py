@@ -49,10 +49,10 @@ r'''
 
 # Ubuntu / bash
 python infer_6d_single.py \
-  --rgb test_20260701/20260701_155018_359_color.png \
-  --d2rgb test_20260701/20260701_155018_359_d2rgb.npy \
+  --rgb test_20260701/20260701_160417_537_color.png \
+  --d2rgb test_20260701/20260701_160417_537_d2rgb.npy \
   --robot-pose -0.014293 0.460711 0.742759 2.167158 0.044541 -3.126827 \
-  --output-dir output/test_0813 \
+  --output-dir output/test_0814 \
   --save-ply \
   --save-review
 
@@ -96,10 +96,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-det", type=int, default=10, help="Maximum YOLO detections.")
     parser.add_argument("--min-depth", type=float, default=0.1, help="Minimum valid depth in meters.")
     parser.add_argument("--max-depth", type=float, default=1.0, help="Maximum valid depth in meters.")
+    parser.add_argument(
+        "--mask-erosion-px",
+        type=int,
+        default=5,
+        help="Erode the segmentation mask inward by this many pixels before depth back-projection.",
+    )
     parser.add_argument("--min-visible-points", type=int, default=200, help="Minimum visible D2RGB mask point count.")
     parser.add_argument("--voxel-size", type=float, default=0.004, help="Voxel size in meters for extraction/registration.")
-    parser.add_argument("--outlier-nb-neighbors", type=int, default=20, help="Open3D statistical outlier neighbor count.")
-    parser.add_argument("--outlier-std-ratio", type=float, default=2.0, help="Open3D statistical outlier std ratio.")
+    parser.add_argument(
+        "--mad-z-threshold",
+        type=float,
+        default=3.5,
+        help="Global camera-Z MAD threshold after pass-through filtering; <=0 disables MAD rejection.",
+    )
     parser.add_argument("--icp-threshold", type=float, default=0.015, help="ICP correspondence threshold in meters.")
     parser.add_argument("--icp-iterations", type=int, default=100, help="ICP max iterations.")
     parser.add_argument("--max-model-points", type=int, default=12000, help="Max CAD points before registration sampling.")
@@ -276,8 +286,6 @@ def _register_points(args: argparse.Namespace, model_points: np.ndarray, scene_p
         model_points,
         scene_points,
         voxel_size_m=args.voxel_size,
-        outlier_nb_neighbors=args.outlier_nb_neighbors,
-        outlier_std_ratio=args.outlier_std_ratio,
         icp_threshold_m=args.icp_threshold,
         icp_iterations=args.icp_iterations,
         max_model_points=args.max_model_points,
@@ -504,6 +512,8 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
         max_depth_m=args.max_depth,
         voxel_size_m=args.voxel_size,
         min_points=args.min_visible_points,
+        mask_erosion_px=args.mask_erosion_px,
+        mad_z_threshold=args.mad_z_threshold,
     )
     timing["visible_points_s"] = round(time.perf_counter() - stage_t0, 6)
     warnings = list(extraction.warnings)
@@ -562,6 +572,7 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
             extraction.visible_points_camera_m,
             model.points_grasp_m,
             t_camera_grasp,
+            semantic_camera_points,
         )
         artifacts["point_cloud_comparison_ply"] = str(comparison_path)
 

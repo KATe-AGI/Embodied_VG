@@ -5,7 +5,7 @@ import unittest
 import numpy as np
 
 from plug_vg.grasp_model import axis_from_semantic_points
-from plug_vg.model_registration import select_registration_candidate
+from plug_vg.model_registration import candidate_transforms_with_rolls, select_registration_candidate
 
 
 class RegisterVisibleGraspModelSingleTests(unittest.TestCase):
@@ -17,8 +17,34 @@ class RegisterVisibleGraspModelSingleTests(unittest.TestCase):
             "summary": {"name": name},
             "fitness": fitness,
             "rmse": rmse,
-            "transform": transform,
+            "t_grasp_camera": transform,
         }
+
+    def test_generates_eight_unique_pca_rotations(self) -> None:
+        model = np.asarray(
+            [[-1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.5, 0.0], [0.0, 0.0, 0.25]],
+            dtype=np.float64,
+        )
+        scene = model @ np.asarray(
+            [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+            dtype=np.float64,
+        ).T + np.asarray([0.2, -0.1, 0.7])
+
+        candidates = candidate_transforms_with_rolls(model, scene, (0.0, 90.0, 180.0, 270.0))
+        rotations = {
+            np.round(item["t_grasp_camera"][:3, :3], decimals=12).tobytes()
+            for item in candidates
+        }
+
+        self.assertEqual(len(candidates), 8)
+        self.assertEqual(len(rotations), 8)
+        self.assertFalse(any("_y_" in item["name"] for item in candidates))
+        for item in candidates:
+            mapped_centroid = (
+                item["t_grasp_camera"][:3, :3] @ np.mean(scene, axis=0)
+                + item["t_grasp_camera"][:3, 3]
+            )
+            np.testing.assert_allclose(mapped_centroid, np.mean(model, axis=0), atol=1e-12)
 
     def test_selects_highest_fitness_then_lowest_rmse(self) -> None:
         status, best, quality = select_registration_candidate(

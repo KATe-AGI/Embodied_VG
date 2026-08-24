@@ -165,6 +165,8 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
             args.max_depth,
             args.voxel_size,
             args.min_visible_points,
+            args.mask_erosion_px,
+            args.mad_z_threshold,
         )
         warnings.extend(extraction.warnings)
         save_mask_overlay(image, extraction.mask, mask_path)
@@ -185,8 +187,6 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
             model.points_grasp_m,
             extraction.visible_points_camera_m,
             args.voxel_size,
-            args.outlier_nb_neighbors,
-            args.outlier_std_ratio,
             args.icp_threshold,
             args.icp_iterations,
             args.max_model_points,
@@ -287,8 +287,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-depth", type=float, default=1.2, help="Maximum valid depth in meters.")
     parser.add_argument("--min-visible-points", type=int, default=200, help="Minimum visible points required.")
     parser.add_argument("--voxel-size", type=float, default=0.004, help="Voxel size in meters.")
-    parser.add_argument("--outlier-nb-neighbors", type=int, default=20, help="Statistical outlier neighbors.")
-    parser.add_argument("--outlier-std-ratio", type=float, default=2.0, help="Statistical outlier std ratio.")
+    parser.add_argument("--mask-erosion-px", type=int, default=5, help="Inward mask erosion radius in pixels.")
+    parser.add_argument("--mad-z-threshold", type=float, default=3.5, help="Global camera-Z MAD threshold.")
     parser.add_argument("--icp-threshold", type=float, default=0.015, help="ICP correspondence threshold in meters.")
     parser.add_argument("--icp-iterations", type=int, default=100, help="ICP iterations per candidate.")
     parser.add_argument("--max-model-points", type=int, default=30000, help="Maximum model points used.")

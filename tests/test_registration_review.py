@@ -87,5 +87,32 @@ class RegistrationReviewTests(unittest.TestCase):
         self.assertEqual(content.count(" 18 183 106\n"), 2)
         self.assertNotIn(" 240 68 56\n", content)
 
+    def test_point_cloud_comparison_marks_three_semantic_points_with_colored_balls(self) -> None:
+        semantic = {
+            "grasp_center_camera_m": [0.0, 0.0, 0.5],
+            "tail_center_camera_m": [0.05, 0.0, 0.5],
+            "head_center_camera_m": [-0.05, 0.0, 0.5],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "semantic.ply"
+            write_registration_comparison_ply(
+                output,
+                np.empty((0, 3), dtype=np.float64),
+                np.empty((0, 3), dtype=np.float64),
+                None,
+                semantic,
+            )
+            content = output.read_text(encoding="ascii")
+
+        lines = content.splitlines()
+        vertex_count = int(next(line for line in lines if line.startswith("element vertex ")).split()[2])
+        marker_lines = lines[lines.index("end_header") + 1 :]
+        self.assertEqual(vertex_count, len(marker_lines))
+        self.assertGreater(vertex_count, 3)
+        self.assertIn("comment semantic markers: yellow=grasp center; cyan=tail center; magenta=head center", content)
+        self.assertIn("0.000000000 0.000000000 0.500000000 255 215 0", content)
+        self.assertIn("0.050000000 0.000000000 0.500000000 0 170 255", content)
+        self.assertIn("-0.050000000 0.000000000 0.500000000 200 0 255", content)
+
 if __name__ == "__main__":
     unittest.main()

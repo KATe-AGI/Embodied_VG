@@ -308,14 +308,23 @@ def write_obj(path: Path, vertices_m: np.ndarray, faces: np.ndarray) -> None:
             f.write(f"f {a} {b} {c}\n")
 
 
-def sample_mesh_points(vertices_m: np.ndarray, faces: np.ndarray, count: int, seed: int) -> np.ndarray:
+def sample_mesh_points_with_normals(
+    vertices_m: np.ndarray,
+    faces: np.ndarray,
+    count: int,
+    seed: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Sample mesh faces and return points with their offline face normals."""
+
     triangles = vertices_m[faces[:, :3]]
     cross = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
-    areas = np.linalg.norm(cross, axis=1) * 0.5
+    cross_norms = np.linalg.norm(cross, axis=1)
+    areas = cross_norms * 0.5
     valid = areas > 1e-16
     if not np.any(valid):
         raise ValueError("mesh has no non-degenerate triangle faces")
     triangles = triangles[valid]
+    face_normals = cross[valid] / cross_norms[valid, None]
     areas = areas[valid]
     probabilities = areas / float(np.sum(areas))
 
@@ -325,10 +334,26 @@ def sample_mesh_points(vertices_m: np.ndarray, faces: np.ndarray, count: int, se
     r1 = np.sqrt(rng.random(int(count)))
     r2 = rng.random(int(count))
     points = (1.0 - r1)[:, None] * chosen[:, 0] + (r1 * (1.0 - r2))[:, None] * chosen[:, 1] + (r1 * r2)[:, None] * chosen[:, 2]
-    return points.astype(np.float64)
+    return points.astype(np.float64), face_normals[ids].astype(np.float64)
 
 
-def write_ply_points(path: Path, points_m: np.ndarray) -> None:
+def sample_mesh_points(vertices_m: np.ndarray, faces: np.ndarray, count: int, seed: int) -> np.ndarray:
+    """Compatibility wrapper returning only sampled mesh points."""
+
+    points, _normals = sample_mesh_points_with_normals(vertices_m, faces, count, seed)
+    return points
+
+
+def write_ply_points(path: Path, points_m: np.ndarray, normals: np.ndarray | None = None) -> None:
+    points_m = np.asarray(points_m, dtype=np.float64)
+    if normals is not None:
+        normals = np.asarray(normals, dtype=np.float64)
+        if normals.shape != points_m.shape:
+            raise ValueError(f"normals must match points shape {points_m.shape}, got {normals.shape}")
+        lengths = np.linalg.norm(normals, axis=1)
+        if np.any(~np.isfinite(normals)) or np.any(lengths <= 1e-12):
+            raise ValueError("normals must be finite and non-zero")
+        normals = normals / lengths[:, None]
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="ascii") as f:
         f.write("ply\n")
@@ -338,9 +363,17 @@ def write_ply_points(path: Path, points_m: np.ndarray) -> None:
         f.write("property float x\n")
         f.write("property float y\n")
         f.write("property float z\n")
+        if normals is not None:
+            f.write("property float nx\n")
+            f.write("property float ny\n")
+            f.write("property float nz\n")
         f.write("end_header\n")
-        for point in points_m:
-            f.write(f"{point[0]:.9f} {point[1]:.9f} {point[2]:.9f}\n")
+        for index, point in enumerate(points_m):
+            values = f"{point[0]:.9f} {point[1]:.9f} {point[2]:.9f}"
+            if normals is not None:
+                normal = normals[index]
+                values += f" {normal[0]:.9f} {normal[1]:.9f} {normal[2]:.9f}"
+            f.write(values + "\n")
 
 
 def write_config(
@@ -493,10 +526,12 @@ def main() -> None:
 
     mesh = mesh_step_with_gmsh(args.step, args.mesh_size_mm)
     assets = build_grasp_frame_assets(mesh)
-    points_m = sample_mesh_points(assets.vertices_m, assets.faces, args.sample_points, args.seed)
+    points_m, normals = sample_mesh_points_with_normals(
+        assets.vertices_m, assets.faces, args.sample_points, args.seed
+    )
 
     write_obj(args.obj, assets.vertices_m, assets.faces)
-    write_ply_points(args.ply, points_m)
+    write_ply_points(args.ply, points_m, normals)
     write_review_report(args.report, args.model_id, args.step, args.obj, args.ply, args.config, assets)
     write_config(
         args.config,

@@ -35,18 +35,18 @@ class RingCoarseRegistrationTests(unittest.TestCase):
         translation = np.asarray([0.1, -0.2, 0.5], dtype=np.float64)
         scene = model @ rotation.T + translation
         base_transform = np.eye(4, dtype=np.float64)
-        base_transform[:3, :3] = rotation
-        base = [{"name": "base", "transform": base_transform, "target_pca_eigenvalues": [1.0, 0.1, 0.1]}]
+        base_transform[:3, :3] = rotation.T
+        base = [{"name": "base", "t_grasp_camera": base_transform, "target_pca_eigenvalues": [1.0, 0.1, 0.1]}]
 
         candidates = ring_aligned_candidates(model, scene, rotation[:, 0], base, 0.004)
 
         self.assertTrue(candidates)
         best = min(candidates, key=lambda item: abs(item["scene_ring_radius_m"] - item["model_ring_radius_m"]))
-        model_ring_camera = (
-            best["transform"][:3, :3] @ np.asarray(best["model_ring_center_grasp_m"])
-            + best["transform"][:3, 3]
+        scene_ring_grasp = (
+            best["t_grasp_camera"][:3, :3] @ np.asarray(best["scene_ring_center_camera_m"])
+            + best["t_grasp_camera"][:3, 3]
         )
-        np.testing.assert_allclose(model_ring_camera, best["scene_ring_center_camera_m"], atol=1e-12)
+        np.testing.assert_allclose(scene_ring_grasp, best["model_ring_center_grasp_m"], atol=1e-12)
 
 
 if __name__ == "__main__":

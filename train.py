@@ -22,7 +22,7 @@ DATASET = ROOT / "yolo_plug_dataset"
 DEFAULT_MODEL = ULTRALYTICS_DIR / "yolo26n-seg.pt"
 DEFAULT_DATA = DATASET / "data.yaml"
 DEFAULT_PROJECT = ULTRALYTICS_DIR / "runs" / "segment"
-DEFAULT_NAME = "plug_yolo26n_seg_20260724"
+DEFAULT_NAME = "plug_yolo26n_seg_20260814"
 
 
 def absolute_data_yaml(path: Path) -> Path:

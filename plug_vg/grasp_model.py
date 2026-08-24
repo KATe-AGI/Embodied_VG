@@ -21,6 +21,7 @@ class GraspModel:
     config: dict[str, Any]
     pointcloud_path: Path
     points_grasp_m: np.ndarray
+    normals_grasp: np.ndarray | None
 
 
 def resolve_path(config_path: Path, value: str) -> Path:
@@ -43,26 +44,57 @@ def load_yaml(path: Path) -> dict[str, Any]:
     return data
 
 
-def read_ascii_ply_points(path: Path) -> np.ndarray:
+def read_ascii_ply_points_and_normals(path: Path) -> tuple[np.ndarray, np.ndarray | None]:
     with path.open("r", encoding="ascii", errors="ignore") as f:
         vertex_count: int | None = None
+        vertex_properties: list[str] = []
+        in_vertex_element = False
         for line in f:
             if line.startswith("element vertex"):
                 vertex_count = int(line.split()[2])
+                in_vertex_element = True
+            elif line.startswith("element "):
+                in_vertex_element = False
+            elif in_vertex_element and line.startswith("property "):
+                vertex_properties.append(line.split()[-1])
             if line.strip() == "end_header":
                 break
         if vertex_count is None:
             raise ValueError(f"PLY vertex element missing: {path}")
+        required = ("x", "y", "z")
+        if any(name not in vertex_properties for name in required):
+            raise ValueError(f"PLY vertex XYZ properties missing: {path}")
+        xyz_indices = [vertex_properties.index(name) for name in required]
+        normal_names = ("nx", "ny", "nz")
+        has_normals = all(name in vertex_properties for name in normal_names)
+        if any(name in vertex_properties for name in normal_names) and not has_normals:
+            raise ValueError(f"PLY must contain either all or none of nx/ny/nz: {path}")
+        normal_indices = [vertex_properties.index(name) for name in normal_names] if has_normals else []
         points = []
+        normals = []
         for index, line in enumerate(f):
             if index >= vertex_count:
                 break
             parts = line.split()
-            if len(parts) >= 3:
-                points.append([float(parts[0]), float(parts[1]), float(parts[2])])
+            if len(parts) >= len(vertex_properties):
+                points.append([float(parts[item]) for item in xyz_indices])
+                if has_normals:
+                    normals.append([float(parts[item]) for item in normal_indices])
     if not points:
         raise ValueError(f"PLY contains no points: {path}")
-    return np.asarray(points, dtype=np.float64)
+    point_array = np.asarray(points, dtype=np.float64)
+    if not has_normals:
+        return point_array, None
+    normal_array = np.asarray(normals, dtype=np.float64)
+    lengths = np.linalg.norm(normal_array, axis=1)
+    if np.any(~np.isfinite(normal_array)) or np.any(lengths <= 1e-12):
+        raise ValueError(f"PLY contains invalid normals: {path}")
+    return point_array, normal_array / lengths[:, None]
+
+
+def read_ascii_ply_points(path: Path) -> np.ndarray:
+    points, _normals = read_ascii_ply_points_and_normals(path)
+    return points
 
 
 def load_grasp_model(config_path: Path = DEFAULT_GRASP_MODEL_CONFIG) -> GraspModel:
@@ -75,11 +107,13 @@ def load_grasp_model(config_path: Path = DEFAULT_GRASP_MODEL_CONFIG) -> GraspMod
     if not isinstance(assets, dict) or "pointcloud_ply" not in assets:
         raise KeyError(f"Grasp model config missing assets.pointcloud_ply: {config_path}")
     pointcloud_path = resolve_path(config_path, str(assets["pointcloud_ply"]))
+    points, normals = read_ascii_ply_points_and_normals(pointcloud_path)
     return GraspModel(
         config_path=config_path,
         config=config,
         pointcloud_path=pointcloud_path,
-        points_grasp_m=read_ascii_ply_points(pointcloud_path),
+        points_grasp_m=points,
+        normals_grasp=normals,
     )
 
 
@@ -137,6 +171,7 @@ __all__ = [
     "load_grasp_model",
     "load_yaml",
     "read_ascii_ply_points",
+    "read_ascii_ply_points_and_normals",
     "resolve_path",
     "semantic_points_camera",
     "transform_points",

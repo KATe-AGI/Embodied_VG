@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from tools.build_grasp_model_assets import sample_mesh_points, write_obj, write_ply_points  # noqa: E402
+from tools.build_grasp_model_assets import sample_mesh_points_with_normals, write_obj, write_ply_points  # noqa: E402
 
 
 ORIGINAL_STEP = ROOT / "plug_model" / "2175B.stp"
@@ -362,8 +362,8 @@ def main() -> None:
     if not args.skip_step:
         build_actual_step(ORIGINAL_STEP, ACTUAL_STEP)
     write_obj(ACTUAL_OBJ, actual_vertices, faces)
-    points = sample_mesh_points(actual_vertices, faces, count=30000, seed=0)
-    write_ply_points(ACTUAL_PLY, points)
+    points, normals = sample_mesh_points_with_normals(actual_vertices, faces, count=30000, seed=0)
+    write_ply_points(ACTUAL_PLY, points, normals)
     write_actual_config(actual_grasp_u_mm)
     write_report(actual_grasp_u_mm)
     write_comparison_image(original_vertices, actual_vertices)

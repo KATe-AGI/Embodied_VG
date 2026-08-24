@@ -46,30 +46,65 @@ def _depth_to_camera_points(mask: np.ndarray, depth_raw: np.ndarray, camera: dic
     return np.column_stack([x, y, z]), np.column_stack([xs, ys]), z
 
 
-def _robust_depth_keep(z: np.ndarray) -> np.ndarray:
+def global_mad_depth_keep(z: np.ndarray, threshold: float) -> tuple[np.ndarray, dict[str, float | None]]:
+    """Return a global median-absolute-deviation inlier mask for camera Z."""
+
+    z = np.asarray(z, dtype=np.float64)
     if len(z) == 0:
-        return np.zeros(0, dtype=bool)
+        return np.zeros(0, dtype=bool), {
+            "median_m": None,
+            "mad_m": None,
+            "scaled_mad_m": None,
+            "lower_m": None,
+            "upper_m": None,
+        }
     median = float(np.median(z))
     mad = float(np.median(np.abs(z - median)))
-    if mad > 1e-9:
-        return np.abs(z - median) <= 3.5 * 1.4826 * mad
-    q1, q3 = np.percentile(z, [25, 75])
-    iqr = float(q3 - q1)
-    if iqr > 1e-9:
-        return (z >= q1 - 1.5 * iqr) & (z <= q3 + 1.5 * iqr)
-    return np.ones(len(z), dtype=bool)
+    scaled_mad = 1.4826 * mad
+    if threshold <= 0.0 or scaled_mad <= 1e-12:
+        keep = np.ones(len(z), dtype=bool)
+        lower = None
+        upper = None
+    else:
+        radius = float(threshold) * scaled_mad
+        lower = median - radius
+        upper = median + radius
+        keep = np.abs(z - median) <= radius
+    return keep, {
+        "median_m": median,
+        "mad_m": mad,
+        "scaled_mad_m": scaled_mad,
+        "lower_m": lower,
+        "upper_m": upper,
+    }
 
 
 def voxel_downsample(points: np.ndarray, voxel_size_m: float) -> np.ndarray:
-    """Deterministically keep one point per voxel."""
+    """Deterministically replace each occupied voxel with its centroid."""
 
     points = np.asarray(points, dtype=np.float64)
     if len(points) == 0 or voxel_size_m <= 0.0:
         return points
     keys = np.floor(points / float(voxel_size_m)).astype(np.int64)
-    _, keep_indices = np.unique(keys, axis=0, return_index=True)
-    keep_indices.sort()
-    return points[keep_indices]
+    _, inverse = np.unique(keys, axis=0, return_inverse=True)
+    counts = np.bincount(inverse)
+    return np.column_stack(
+        [np.bincount(inverse, weights=points[:, axis]) / counts for axis in range(3)]
+    )
+
+
+def erode_mask(mask: np.ndarray, erosion_px: int) -> np.ndarray:
+    """Erode a binary mask inward by approximately ``erosion_px`` pixels."""
+
+    mask = np.asarray(mask, dtype=np.uint8)
+    erosion_px = int(erosion_px)
+    if erosion_px <= 0 or not np.any(mask):
+        return mask.copy()
+    import cv2
+
+    diameter = 2 * erosion_px + 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (diameter, diameter))
+    return cv2.erode(mask, kernel, iterations=1)
 
 
 def synthesize_scene_point_cloud(
@@ -111,6 +146,8 @@ def extract_visible_points_from_mask(
     max_depth_m: float,
     voxel_size_m: float = 0.0,
     min_points: int = 200,
+    mask_erosion_px: int = 5,
+    mad_z_threshold: float = 3.5,
 ) -> VisiblePointCloudResult:
     """Extract visible object points in the RGB camera frame from a polygon mask."""
 
@@ -130,26 +167,47 @@ def extract_visible_points_from_mask(
     if depth_raw.shape[:2] != expected_shape:
         warnings.append(f"depth_shape_{depth_raw.shape[1]}x{depth_raw.shape[0]}_differs_from_camera_config")
 
-    mask = polygon_mask(polygon_xy, depth_raw.shape[:2])
-    mask_pixels = int(np.count_nonzero(mask))
-    if mask_pixels == 0:
+    raw_mask = polygon_mask(polygon_xy, depth_raw.shape[:2])
+    raw_mask_pixels = int(np.count_nonzero(raw_mask))
+    if raw_mask_pixels == 0:
         return VisiblePointCloudResult(
             status="failed",
             reason="mask_empty",
             visible_points_camera_m=np.empty((0, 3), dtype=np.float64),
+            mask=raw_mask,
+            quality={"raw_mask_pixels": 0, "mask_pixels": 0},
+            warnings=warnings,
+        )
+
+    mask = erode_mask(raw_mask, mask_erosion_px)
+    mask_pixels = int(np.count_nonzero(mask))
+    mask_quality = {
+        "raw_mask_pixels": raw_mask_pixels,
+        "mask_pixels": mask_pixels,
+        "mask_erosion_px": int(mask_erosion_px),
+        "mask_erosion_removed_pixels": int(raw_mask_pixels - mask_pixels),
+    }
+    if mask_pixels == 0:
+        return VisiblePointCloudResult(
+            status="failed",
+            reason="mask_empty_after_erosion",
+            visible_points_camera_m=np.empty((0, 3), dtype=np.float64),
             mask=mask,
-            quality={"mask_pixels": 0},
+            quality=mask_quality,
             warnings=warnings,
         )
 
     points, pixels, z = _depth_to_camera_points(mask, depth_raw, camera, min_depth_m, max_depth_m)
     raw_count = int(len(points))
     quality: dict[str, Any] = {
-        "mask_pixels": mask_pixels,
+        **mask_quality,
         "visible_raw_points": raw_count,
         "min_depth_m": float(min_depth_m),
         "max_depth_m": float(max_depth_m),
         "voxel_size_m": float(voxel_size_m),
+        "invalid_or_out_of_range_depth_pixels": int(mask_pixels - raw_count),
+        "depth_filter_strategy": "pass_through_then_global_mad",
+        "mad_z_threshold": float(mad_z_threshold),
     }
     if raw_count == 0:
         return VisiblePointCloudResult(
@@ -161,24 +219,43 @@ def extract_visible_points_from_mask(
             warnings=warnings,
         )
 
-    keep = _robust_depth_keep(z)
-    filtered = points[keep]
+    keep, mad_stats = global_mad_depth_keep(z, mad_z_threshold)
+    filtered_points = points[keep]
     filtered_pixels = pixels[keep]
     filtered_z = z[keep]
-    downsampled = voxel_downsample(filtered, voxel_size_m)
+    if not len(filtered_points):
+        return VisiblePointCloudResult(
+            status="failed",
+            reason="no_points_after_global_mad",
+            visible_points_camera_m=np.empty((0, 3), dtype=np.float64),
+            mask=mask,
+            quality={
+                **quality,
+                "visible_filtered_points": 0,
+                "mad_rejected_points": raw_count,
+                "mad_statistics": mad_stats,
+            },
+            warnings=warnings,
+        )
+
+    downsampled = voxel_downsample(filtered_points, voxel_size_m)
     quality.update(
         {
-            "visible_filtered_points": int(len(filtered)),
+            "visible_filtered_points": int(len(filtered_points)),
             "visible_downsampled_points": int(len(downsampled)),
-            "depth_min_m": round(float(np.min(filtered_z)), 8) if len(filtered_z) else None,
-            "depth_median_m": round(float(np.median(filtered_z)), 8) if len(filtered_z) else None,
-            "depth_max_m": round(float(np.max(filtered_z)), 8) if len(filtered_z) else None,
-            "depth_rejected_points": int(raw_count - len(filtered)),
+            "mad_rejected_points": int(raw_count - len(filtered_points)),
+            "mad_statistics": mad_stats,
+            "pass_through_depth_min_m": round(float(np.min(z)), 8),
+            "pass_through_depth_median_m": round(float(np.median(z)), 8),
+            "pass_through_depth_max_m": round(float(np.max(z)), 8),
+            "depth_min_m": round(float(np.min(filtered_z)), 8),
+            "depth_median_m": round(float(np.median(filtered_z)), 8),
+            "depth_max_m": round(float(np.max(filtered_z)), 8),
             "pixel_bbox_xyxy": [
-                int(np.min(filtered_pixels[:, 0])) if len(filtered_pixels) else None,
-                int(np.min(filtered_pixels[:, 1])) if len(filtered_pixels) else None,
-                int(np.max(filtered_pixels[:, 0])) if len(filtered_pixels) else None,
-                int(np.max(filtered_pixels[:, 1])) if len(filtered_pixels) else None,
+                int(np.min(filtered_pixels[:, 0])),
+                int(np.min(filtered_pixels[:, 1])),
+                int(np.max(filtered_pixels[:, 0])),
+                int(np.max(filtered_pixels[:, 1])),
             ],
         }
     )

@@ -47,6 +47,15 @@ PLY_PROPERTY_TYPES = {
 }
 
 
+_SEMANTIC_MARKER_COLORS = {
+    "grasp_center_camera_m": (255, 215, 0),
+    "tail_center_camera_m": (0, 170, 255),
+    "head_center_camera_m": (200, 0, 255),
+}
+_SEMANTIC_MARKER_RADIUS_M = 0.006
+_SEMANTIC_MARKER_SPACING_M = 0.0015
+
+
 def parse_ply_header(path: Path) -> PlyHeader:
     with path.open("rb") as f:
         lines: list[bytes] = []
@@ -205,10 +214,11 @@ def _registration_group(
         if t_camera_grasp is not None
         else np.empty((0, 3), dtype=np.float64)
     )
-    coarse_raw = quality.get("t_camera_grasp_coarse")
-    coarse_transform = None if coarse_raw is None else np.asarray(coarse_raw, dtype=np.float64)
-    if coarse_transform is not None and coarse_transform.shape != (4, 4):
-        coarse_transform = None
+    coarse_raw = quality.get("t_grasp_camera_coarse")
+    coarse_grasp_camera = None if coarse_raw is None else np.asarray(coarse_raw, dtype=np.float64)
+    if coarse_grasp_camera is not None and coarse_grasp_camera.shape != (4, 4):
+        coarse_grasp_camera = None
+    coarse_transform = None if coarse_grasp_camera is None else np.linalg.inv(coarse_grasp_camera)
     model_coarse = (
         transform_points(model_sample, coarse_transform)
         if coarse_transform is not None
@@ -240,8 +250,9 @@ def write_registration_comparison_ply(
     visible_points: np.ndarray,
     model_points: np.ndarray,
     t_camera_grasp: np.ndarray | None,
+    semantic_camera: dict[str, list[float]] | None = None,
 ) -> None:
-    """Write observed and registered model points as one colored camera-frame PLY."""
+    """Write observed/model points and colored semantic markers in one camera-frame PLY."""
 
     visible = np.asarray(visible_points, dtype=np.float64)
     visible = visible[np.isfinite(visible).all(axis=1)]
@@ -252,12 +263,38 @@ def write_registration_comparison_ply(
         if t_camera_grasp is not None
         else np.empty((0, 3), dtype=np.float64)
     )
+    marker_groups: list[tuple[np.ndarray, tuple[int, int, int]]] = []
+    if semantic_camera:
+        offsets = np.arange(
+            -_SEMANTIC_MARKER_RADIUS_M,
+            _SEMANTIC_MARKER_RADIUS_M + _SEMANTIC_MARKER_SPACING_M * 0.5,
+            _SEMANTIC_MARKER_SPACING_M,
+            dtype=np.float64,
+        )
+        xx, yy, zz = np.meshgrid(offsets, offsets, offsets, indexing="ij")
+        ball_offsets = np.column_stack((xx.ravel(), yy.ravel(), zz.ravel()))
+        ball_offsets[np.abs(ball_offsets) < 1e-12] = 0.0
+        ball_offsets = ball_offsets[
+            np.einsum("ij,ij->i", ball_offsets, ball_offsets)
+            <= _SEMANTIC_MARKER_RADIUS_M**2 + 1e-15
+        ]
+        for key, color in _SEMANTIC_MARKER_COLORS.items():
+            raw_center = semantic_camera.get(key)
+            if raw_center is None:
+                continue
+            center = np.asarray(raw_center, dtype=np.float64)
+            if center.shape != (3,) or not np.isfinite(center).all():
+                continue
+            marker_groups.append((center + ball_offsets, color))
+
+    marker_count = sum(len(points) for points, _ in marker_groups)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="ascii") as stream:
         stream.write("ply\nformat ascii 1.0\n")
         stream.write("comment frame: camera_rgb; units: meter\n")
         stream.write("comment green: D2RGB visible points; red: registered CAD points\n")
-        stream.write(f"element vertex {len(visible) + len(registered)}\n")
+        stream.write("comment semantic markers: yellow=grasp center; cyan=tail center; magenta=head center\n")
+        stream.write(f"element vertex {len(visible) + len(registered) + marker_count}\n")
         stream.write("property float x\nproperty float y\nproperty float z\n")
         stream.write("property uchar red\nproperty uchar green\nproperty uchar blue\n")
         stream.write("end_header\n")
@@ -265,6 +302,9 @@ def write_registration_comparison_ply(
             stream.write(f"{x:.9f} {y:.9f} {z:.9f} 18 183 106\n")
         for x, y, z in registered:
             stream.write(f"{x:.9f} {y:.9f} {z:.9f} 240 68 56\n")
+        for marker_points, (red, green, blue) in marker_groups:
+            for x, y, z in marker_points:
+                stream.write(f"{x:.9f} {y:.9f} {z:.9f} {red} {green} {blue}\n")
 
 
 def write_interactive_review_html(

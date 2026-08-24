@@ -156,7 +156,7 @@ def ring_aligned_candidates(
     base_candidates: list[dict[str, Any]],
     bin_size_m: float,
 ) -> list[dict[str, Any]]:
-    """Clone PCA rotations with translations that align detected ring centers."""
+    """Clone scene-to-model PCA rotations and align detected ring centers."""
 
     model_ring = detect_model_ring(model_points, bin_size_m)
     if model_ring is None:
@@ -170,13 +170,16 @@ def ring_aligned_candidates(
     candidates: list[dict[str, Any]] = []
     for hypothesis_index, hypothesis in enumerate(hypotheses, start=1):
         for base in base_candidates:
-            transform = np.asarray(base["transform"], dtype=np.float64).copy()
-            transform[:3, 3] = hypothesis.center_camera_m - transform[:3, :3] @ model_ring.center_grasp_m
+            t_grasp_camera = np.asarray(base["t_grasp_camera"], dtype=np.float64).copy()
+            t_grasp_camera[:3, 3] = (
+                model_ring.center_grasp_m
+                - t_grasp_camera[:3, :3] @ hypothesis.center_camera_m
+            )
             candidates.append(
                 {
                     **base,
                     "name": f"ring_{hypothesis_index}_{base['name']}",
-                    "transform": transform,
+                    "t_grasp_camera": t_grasp_camera,
                     "initializer": "large_ring_center",
                     "ring_hypothesis": int(hypothesis_index),
                     "model_ring_center_grasp_m": model_ring.center_grasp_m.tolist(),
