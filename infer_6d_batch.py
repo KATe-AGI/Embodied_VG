@@ -21,9 +21,9 @@ r"""
 # conda activate embodiedvg
 
 python infer_6d_batch.py \
-  --input-dir test_20260814 \
+  --input-dir test_20260705 \
   --robot-pose -0.014293 0.460711 0.742759 2.167158 0.044541 -3.126827 \
-  --output-dir output/test_0819 \
+  --output-dir output/test_0825 \
   --save-ply \
   --save-review
 """
@@ -68,6 +68,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mad-z-threshold", type=float, default=3.5)
     parser.add_argument("--icp-threshold", type=float, default=0.015)
     parser.add_argument("--icp-iterations", type=int, default=100)
+    parser.add_argument("--registration-method", choices=("legacy", "symmetric"), default="symmetric")
     parser.add_argument("--max-model-points", type=int, default=12000)
     parser.add_argument("--max-scene-points", type=int, default=12000)
     parser.add_argument("--min-registration-fitness", type=float, default=0.35)

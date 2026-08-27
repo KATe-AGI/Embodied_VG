@@ -22,7 +22,7 @@ if str(ULTRALYTICS_DIR) not in sys.path:
 from ultralytics import YOLO  # noqa: E402
 
 from plug_vg.config import DEFAULT_CAMERA, DEFAULT_SEG_WEIGHTS, load_camera  # noqa: E402
-from plug_vg.geometry import project_point_float, rotation_to_quaternion_xyzw  # noqa: E402
+from plug_vg.geometry import polygon_mask, project_point_float, rotation_to_quaternion_xyzw  # noqa: E402
 from plug_vg.grasp_model import (  # noqa: E402
     DEFAULT_GRASP_MODEL_CONFIG,
     axis_from_semantic_points,
@@ -34,6 +34,7 @@ from plug_vg.io import read_depth_raw, write_json  # noqa: E402
 from plug_vg.model_registration import register_visible_points  # noqa: E402
 from plug_vg.registration_review import write_interactive_review_html, write_registration_comparison_ply  # noqa: E402
 from plug_vg.robot_transform import convert_camera_grasp_to_base, load_hand_eye_matrix, robot_pose_to_matrix, round_list  # noqa: E402
+from plug_vg.symmetric_registration import register_symmetric_points  # noqa: E402
 from plug_vg.visible_points import (  # noqa: E402
     extract_visible_points_from_mask,
     save_mask_overlay,
@@ -108,10 +109,16 @@ def parse_args() -> argparse.Namespace:
         "--mad-z-threshold",
         type=float,
         default=3.5,
-        help="Global camera-Z MAD threshold after pass-through filtering; <=0 disables MAD rejection.",
+        help="Legacy-only global camera-Z MAD threshold; <=0 disables MAD rejection.",
     )
     parser.add_argument("--icp-threshold", type=float, default=0.015, help="ICP correspondence threshold in meters.")
     parser.add_argument("--icp-iterations", type=int, default=100, help="ICP max iterations.")
+    parser.add_argument(
+        "--registration-method",
+        choices=("legacy", "symmetric"),
+        default="symmetric",
+        help="Registration implementation. 'symmetric' is the ground-truth-evaluated production default.",
+    )
     parser.add_argument("--max-model-points", type=int, default=12000, help="Max CAD points before registration sampling.")
     parser.add_argument("--max-scene-points", type=int, default=12000, help="Max visible points before registration sampling.")
     parser.add_argument("--min-registration-fitness", type=float, default=0.35, help="Minimum ICP fitness for ok status.")
@@ -152,6 +159,7 @@ def input_summary(args: argparse.Namespace) -> dict[str, Any]:
         "d2rgb": str(args.d2rgb),
         "seg_weights": str(args.seg_weights),
         "model_config": str(args.model_config),
+        "registration_method": str(args.registration_method),
         "robot_pose_xyzrpy_m_rad": [float(v) for v in args.robot_pose],
     }
 
@@ -281,7 +289,23 @@ def _save_review(
     )
 
 
-def _register_points(args: argparse.Namespace, model_points: np.ndarray, scene_points: np.ndarray):
+def _register_points(
+    args: argparse.Namespace,
+    model_points: np.ndarray,
+    scene_points: np.ndarray,
+    raw_mask: np.ndarray,
+    depth_raw: np.ndarray,
+    camera: dict[str, Any],
+):
+    if args.registration_method == "symmetric":
+        return register_symmetric_points(
+            model_points,
+            scene_points,
+            raw_mask,
+            depth_raw,
+            camera,
+            device=args.device,
+        )
     return register_visible_points(
         model_points,
         scene_points,
@@ -502,7 +526,15 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
         return result, json_path
 
     polygon = seg_item.get("polygon_xy") or seg_item.get("polygon")
+    raw_mask = polygon_mask(polygon, depth.shape[:2])
     stage_t0 = time.perf_counter()
+    # The symmetry-aware solver uses the eroded mask as a high-confidence
+    # proposal core and the raw mask/depth for final visibility scoring.  A
+    # global camera-Z MAD assumes a compact depth slab and removes valid plug
+    # geometry when the long axis points toward the camera.
+    extraction_mad_z_threshold = (
+        0.0 if args.registration_method == "symmetric" else args.mad_z_threshold
+    )
     extraction = extract_visible_points_from_mask(
         image,
         depth,
@@ -513,7 +545,7 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
         voxel_size_m=args.voxel_size,
         min_points=args.min_visible_points,
         mask_erosion_px=args.mask_erosion_px,
-        mad_z_threshold=args.mad_z_threshold,
+        mad_z_threshold=extraction_mad_z_threshold,
     )
     timing["visible_points_s"] = round(time.perf_counter() - stage_t0, 6)
     warnings = list(extraction.warnings)
@@ -540,7 +572,12 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
     model = load_grasp_model(args.model_config)
     stage_t0 = time.perf_counter()
     reg_status, t_camera_grasp, registration_quality = _register_points(
-        args, model.points_grasp_m, extraction.visible_points_camera_m
+        args,
+        model.points_grasp_m,
+        extraction.visible_points_camera_m,
+        raw_mask,
+        depth,
+        camera,
     )
     timing["registration_s"] = round(time.perf_counter() - stage_t0, 6)
 

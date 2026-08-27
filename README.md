@@ -1,17 +1,18 @@
 # EmbodiedVG
 
-EmbodiedVG 是插头抓取的视觉侧工程。当前主线使用 YOLO 分割可见插头、在 D2RGB 深度上反投影得到可见点云，再与 `plugCAD` 抓取坐标系模板进行 PCA/ICP 配准，最终输出相机系和机器人基座系下的抓取点、头尾语义点与有向长轴。
+EmbodiedVG 是插头抓取的视觉侧工程。当前主线使用 YOLO 分割可见插头、在原生 `1920×1080` D2RGB 深度上反投影得到可见点云，再以长轴对称性降维的 CAD profile 和遮挡感知渲染完成配准，最终输出相机系和机器人基座系下的抓取点、头尾语义点与有向长轴。
 
 ## 当前主线
 
 ```text
-RGB 图像 ──YOLO-seg──> 可见插头掩膜 ──边界腐蚀──> 深度掩膜
-                            │
-D2RGB 深度 ──范围门控/全局 MAD/反投影/质心体素──> 相机系可见点云
-                            │
-plugCAD 抓取系点云 ─PCA/ICP──> T_camera_grasp
-                            │
-机器人当前位姿 + 手眼标定 ──> T_base_grasp
+RGB 图像 ──YOLO-seg──> 原始掩膜 ───────────────┐
+                         └─5 px 内缩核心掩膜    │
+D2RGB ─范围门控/反投影/4 mm 质心体素─> 局部点云 │
+                                               │
+plugCAD ─轴向/径向距离场─> 鲁棒 5DoF 候选       │
+                         └─遮挡感知可见轮廓评分/轴向搜索─> T_camera_grasp
+                                                               │
+机器人当前位姿 + 手眼标定 ─────────────────────────────────────> T_base_grasp
 ```
 
 配准只使用 YOLO 掩膜内的 D2RGB 点，不需要额外的场景 PLY。
@@ -44,6 +45,7 @@ infer_6d_single.py                 单帧 6D 抓取主入口
 infer.py                           YOLO 分割调试入口
 train.py / val.py                  分割训练与验证
 plug_vg/                           点云、配准、语义点和坐标变换模块
+evaluation/                        相机系真值评估与留一模块比较
 configs/camera/plug_rgbd.yaml      RGB/D2RGB 相机内参
 configs/plug_models/plugCAD.yaml   当前默认抓取模板
 configs/plug_models/2175B.yaml     原始供应商模型配置
@@ -146,14 +148,15 @@ PowerShell 的换行符是反引号 `` ` ``，反引号后不要再放空格。
 常用参数：
 
 - `--device 0` 指定 CUDA GPU，`--device cpu` 强制 CPU；
+- `--registration-method symmetric` 使用当前默认方法；`legacy` 保留旧 PCA/环特征/ICP 作为回归对照；
 - `--mask-erosion-px` 控制深度反投影前的掩膜内缩半径，默认 `5` 像素；
-- `--mad-z-threshold` 控制直通滤波后的全局相机 Z 轴 MAD 阈值，默认 `3.5`；
+- `--mad-z-threshold` 只影响 `legacy`；对称主线不使用全局相机 Z 轴 MAD；
 - `--save-overlay` 保存可见掩膜叠加图；
 - `--save-ply` 保存可见插头点云；
 - `--save-review` 保存掩膜、可见点云、RGB 语义点投影、交互 HTML 和点云对比 PLY；
-- `--min-registration-fitness` 和 `--max-inlier-rmse` 控制当前 ICP 质量门。
+- `--min-registration-fitness` 和 `--max-inlier-rmse` 只控制 `legacy` 的 ICP 质量门。
 
-当前观测点预处理采用“绝对深度直通滤波 + 全局相机 Z 轴 MAD”：掩膜默认向内腐蚀 5 像素，先保留绝对深度范围内的点，再以 `median(Z) ± 3.5 × 1.4826 × MAD(Z)` 剔除全局深度异常点，随后只进行一次 4 mm 体素质心降采样。配准入口不再执行 Open3D 统计离群过滤，也不重复体素化场景点云。
+当前对称主线采用双掩膜：5 px 内缩掩膜提供高置信度 proposal 点，原始掩膜和完整 D2RGB 用于最终可见性评分。观测点只做绝对深度范围过滤和一次 4 mm 体素质心降采样，不使用会误删近光轴有效几何的全局 Z-MAD，也不执行 SOR。配准把绕长轴 roll 作为任务等价自由度，在轴向/径向 CAD 距离场上以鲁棒损失生成有向长轴与抓取中心候选，再用遮挡感知 CAD 可见轮廓和一维轴向搜索统一排序。运行时没有 fitness/RMSE 拒绝门；只要输入有效且存在有限解，就输出最佳几何估计。
 
 ## 输出产物
 
@@ -172,9 +175,9 @@ PLY 只保存点和颜色，不能控制 IDE 插件的拖拽、坐标轴、背�
 
 JSON 的 `status` 可为：
 
-- `ok`：通过当前 fitness/RMSE 门控，并输出相机系与基座系位姿；
-- `failed`：分割、深度、点数或配准质量不合格；
-- `ambiguous`：存在无法区分的头尾反向候选。
+- `ok`：得到有限最佳估计，并输出相机系与基座系位姿；
+- `failed`：输入缺失、分割/深度/点数无效，或没有有限配准解；
+- `ambiguous`：仅旧 `legacy` 方法可能返回的兼容状态。
 
 只有 `status=ok` 时的 `grasp_pose_base` 才是可供下游使用的候选。主要 JSON 字段包括 `t_camera_grasp`、`grasp_pose_camera`、`semantic_points_camera`、`semantic_points_base`、`grasp_pose_base`、`tail_to_head_axis_base`、`registration_quality`、`artifacts` 和 `timing`。
 
@@ -230,12 +233,22 @@ python -m unittest discover -s tests
 python -m py_compile infer_6d_single.py plug_vg/*.py tools/*.py
 ```
 
-测试覆盖实际尺寸 CAD 映射、抓取坐标系语义、深度反投影、可见点云、PCA/ICP 候选选择、质量门控和复核产物。
+相机系真值评估及与旧模块的逐帧留一比较：
+
+```bash
+python evaluation/evaluate_camera_pose.py \
+  --gt-dir test_20260814 \
+  --reference-dir output/test_0824 \
+  --prediction-dir output/test_symmetric_final_batch \
+  --output-json output/test_symmetric_final_batch/evaluation_with_loo.json \
+  --output-csv output/test_symmetric_final_batch/evaluation.csv
+```
+
+主指标是相机系 `grasp/tail/head` 三点的全局 RMSE；绕长轴 roll 不计入任务误差。测试覆盖实际尺寸 CAD 映射、抓取坐标系语义、深度反投影、对称 profile、相机系评估、PCA/ICP 回归对照和复核产物。
 
 ## 已知限制
 
 - `configs/robot/cs_robot.yaml` 中的实时机器人位姿提供器尚未实现，当前必须显式传入 `--robot-pose`。
-- 单目视角的局部可见点云可能让 PCA 长轴退化；单向局部 ICP 也可能对错误姿态给出高 fitness。
-- `status=ok` 只表示通过当前数值门控，不代表拥有 3D 真值验证；现阶段仍需同时检查 RGB 投影、交互 HTML 和红绿 PLY。
-- 面对相机的近圆形端面或严重遮挡场景尤其容易出现长轴误判。
+- 单固定视角、近圆形端面和严重遮挡仍可能使有向长轴欠约束；`status=ok` 表示最佳有限估计，不代表低误差保证。
+- 当前 12 帧相机系人工真值只覆盖 `test_20260814`，上线前仍需扩大独立工况测试集，并继续检查 RGB 投影、交互 HTML 和红绿 PLY。
 - 没有逐帧真实机器人位姿时，重用同一 `--robot-pose` 只能用于相机系配准复核，不能用于声称基座系绝对精度。

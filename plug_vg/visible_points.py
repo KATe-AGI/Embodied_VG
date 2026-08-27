@@ -206,7 +206,9 @@ def extract_visible_points_from_mask(
         "max_depth_m": float(max_depth_m),
         "voxel_size_m": float(voxel_size_m),
         "invalid_or_out_of_range_depth_pixels": int(mask_pixels - raw_count),
-        "depth_filter_strategy": "pass_through_then_global_mad",
+        "depth_filter_strategy": (
+            "pass_through_only" if mad_z_threshold <= 0.0 else "pass_through_then_global_mad"
+        ),
         "mad_z_threshold": float(mad_z_threshold),
     }
     if raw_count == 0:
