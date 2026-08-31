@@ -11,6 +11,7 @@ from tools.build_actual_plug_cad import (
     ACTUAL_LANDMARKS_MM,
     ACTUAL_SEGMENTS_MM,
     ORIGINAL_LANDMARKS_MM,
+    TARGET_GRASP_TO_HEAD_MM,
     axial_map_mm,
     read_obj,
 )
@@ -48,6 +49,14 @@ class ActualPlugCadTests(unittest.TestCase):
         self.assertEqual(config["dimensions_m"]["tail_end_to_large_ring_near_edge"], 0.1105)
         self.assertEqual(config["dimensions_m"]["large_ring_length"], 0.023)
         np.testing.assert_allclose(config["dimensions_m"]["axial_segments_s1_to_s8"], ACTUAL_SEGMENTS_MM * 0.001)
+        semantic = config["semantic_points_grasp_m"]
+        self.assertAlmostEqual(semantic["head_center"][0], TARGET_GRASP_TO_HEAD_MM * 0.001, places=8)
+        self.assertAlmostEqual(semantic["tail_center"][0], -0.0778, places=8)
+        self.assertAlmostEqual(
+            semantic["head_center"][0] - semantic["tail_center"][0],
+            config["dimensions_m"]["head_tail_axis_length"],
+            places=8,
+        )
 
 
 if __name__ == "__main__":

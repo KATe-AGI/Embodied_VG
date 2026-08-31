@@ -16,11 +16,11 @@ semantic_points_grasp_m:
   - 0.0
   - 0.0
   tail_center:
-  - -0.06701198
+  - -0.0778
   - 0.0
   - 0.0
   head_center:
-  - 0.10078802
+  - 0.09
   - 0.0
   - 0.0
 dimensions_m:
@@ -39,7 +39,7 @@ dimensions_m:
   - 0.0223
   - 0.012
 coordinate_system:
-  origin: mapped_original_2175B_grasp_origin
+  origin: task_selected_grasp_point_90_mm_from_head
   x_axis: tail_to_head
   y_axis: unchanged_from_2175B_gripper_closing_direction
   z_axis: unchanged_from_2175B_approach_direction
@@ -95,6 +95,7 @@ axial_adaptation:
   - 23.0
   - 22.3
   - 12.0
+  grasp_point_to_head_mm: 90.0
   interpretation: tail center means the center of the tail end face
 build:
   tool: tools/build_actual_plug_cad.py

@@ -39,6 +39,9 @@ ORIGINAL_SEGMENTS_MM = np.asarray([29.3, 18.0, 8.5, 50.0, 21.7, 21.0, 22.3, 9.5]
 ACTUAL_SEGMENTS_MM = np.asarray([29.3, 1.0, 8.5, 50.0, 21.7, 23.0, 22.3, 12.0], dtype=np.float64)
 ORIGINAL_LANDMARKS_MM = np.concatenate(([0.0], np.cumsum(ORIGINAL_SEGMENTS_MM)))
 ACTUAL_LANDMARKS_MM = np.concatenate(([0.0], np.cumsum(ACTUAL_SEGMENTS_MM)))
+# The task-selected grasp center is defined from the physical head end rather
+# than inherited from the original 2175B model's estimated grasp location.
+TARGET_GRASP_TO_HEAD_MM = 90.0
 
 
 def axial_map_mm(values: np.ndarray | float) -> np.ndarray:
@@ -71,8 +74,7 @@ def deform_grasp_mesh(vertices_m: np.ndarray) -> tuple[np.ndarray, float]:
     vertices_mm = np.asarray(vertices_m, dtype=np.float64) * 1000.0
     original_tail_x_mm = float(np.min(vertices_mm[:, 0]))
     original_u_mm = vertices_mm[:, 0] - original_tail_x_mm
-    original_grasp_u_mm = -original_tail_x_mm
-    actual_grasp_u_mm = float(axial_map_mm(original_grasp_u_mm))
+    actual_grasp_u_mm = float(ACTUAL_LANDMARKS_MM[-1] - TARGET_GRASP_TO_HEAD_MM)
 
     actual = vertices_mm.copy()
     actual[:, 0] = axial_map_mm(original_u_mm) - actual_grasp_u_mm
@@ -166,7 +168,7 @@ def write_actual_config(actual_grasp_u_mm: float) -> None:
             "axial_segments_s1_to_s8": [float(value * 0.001) for value in ACTUAL_SEGMENTS_MM],
         },
         "coordinate_system": {
-            "origin": "mapped_original_2175B_grasp_origin",
+            "origin": "task_selected_grasp_point_90_mm_from_head",
             "x_axis": "tail_to_head",
             "y_axis": "unchanged_from_2175B_gripper_closing_direction",
             "z_axis": "unchanged_from_2175B_approach_direction",
@@ -180,6 +182,7 @@ def write_actual_config(actual_grasp_u_mm: float) -> None:
             "actual_landmarks_from_tail_mm": ACTUAL_LANDMARKS_MM.tolist(),
             "original_segment_lengths_mm": ORIGINAL_SEGMENTS_MM.tolist(),
             "actual_segment_lengths_mm": ACTUAL_SEGMENTS_MM.tolist(),
+            "grasp_point_to_head_mm": TARGET_GRASP_TO_HEAD_MM,
             "interpretation": "tail center means the center of the tail end face",
         },
         "build": {
@@ -221,7 +224,8 @@ def write_report(actual_grasp_u_mm: float) -> None:
         f"- Actual landmarks from tail, mm: `{ACTUAL_LANDMARKS_MM.tolist()}`",
         f"- Segment scale factors: `{np.round(scales, 8).tolist()}`",
         "- Only the tail-to-head coordinate changes; every transverse coordinate is copied unchanged.",
-        f"- Mapped grasp origin from tail: `{actual_grasp_u_mm:.6f} mm`.",
+        f"- Task-selected grasp origin from tail: `{actual_grasp_u_mm:.6f} mm`.",
+        f"- Task-selected grasp origin to head: `{TARGET_GRASP_TO_HEAD_MM:.6f} mm`.",
         "",
         "## Manual Review",
         "- Confirm that S2 is intentionally axially compressed from 18.0 mm to 1.0 mm.",
@@ -374,7 +378,8 @@ def main() -> None:
     print(f"actual_ply: {ACTUAL_PLY}")
     print(f"config: {ACTUAL_CONFIG}")
     print(f"comparison: {COMPARISON_IMAGE}")
-    print(f"mapped_grasp_origin_from_tail_mm: {actual_grasp_u_mm:.6f}")
+    print(f"task_grasp_origin_from_tail_mm: {actual_grasp_u_mm:.6f}")
+    print(f"task_grasp_origin_to_head_mm: {TARGET_GRASP_TO_HEAD_MM:.6f}")
 
 
 if __name__ == "__main__":
