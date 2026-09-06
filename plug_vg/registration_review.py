@@ -251,6 +251,7 @@ def write_registration_comparison_ply(
     model_points: np.ndarray,
     t_camera_grasp: np.ndarray | None,
     semantic_camera: dict[str, list[float]] | None = None,
+    clamp_center_camera_m: np.ndarray | None = None,
 ) -> None:
     """Write observed/model points and colored semantic markers in one camera-frame PLY."""
 
@@ -264,7 +265,7 @@ def write_registration_comparison_ply(
         else np.empty((0, 3), dtype=np.float64)
     )
     marker_groups: list[tuple[np.ndarray, tuple[int, int, int]]] = []
-    if semantic_camera:
+    if semantic_camera or clamp_center_camera_m is not None:
         offsets = np.arange(
             -_SEMANTIC_MARKER_RADIUS_M,
             _SEMANTIC_MARKER_RADIUS_M + _SEMANTIC_MARKER_SPACING_M * 0.5,
@@ -278,8 +279,13 @@ def write_registration_comparison_ply(
             np.einsum("ij,ij->i", ball_offsets, ball_offsets)
             <= _SEMANTIC_MARKER_RADIUS_M**2 + 1e-15
         ]
-        for key, color in _SEMANTIC_MARKER_COLORS.items():
-            raw_center = semantic_camera.get(key)
+        centers = dict(semantic_camera or {})
+        colors = dict(_SEMANTIC_MARKER_COLORS)
+        if clamp_center_camera_m is not None:
+            centers['clamp_center_camera_m'] = clamp_center_camera_m
+            colors['clamp_center_camera_m'] = (255, 128, 0)
+        for key, color in colors.items():
+            raw_center = centers.get(key)
             if raw_center is None:
                 continue
             center = np.asarray(raw_center, dtype=np.float64)
@@ -294,6 +300,8 @@ def write_registration_comparison_ply(
         stream.write("comment frame: camera_rgb; units: meter\n")
         stream.write("comment green: D2RGB visible points; red: registered CAD points\n")
         stream.write("comment semantic markers: yellow=grasp center; cyan=tail center; magenta=head center\n")
+        if clamp_center_camera_m is not None:
+            stream.write(f"comment orange: flange-defined clamp center; marker radius {_SEMANTIC_MARKER_RADIUS_M} m is visualization only\n")
         stream.write(f"element vertex {len(visible) + len(registered) + marker_count}\n")
         stream.write("property float x\nproperty float y\nproperty float z\n")
         stream.write("property uchar red\nproperty uchar green\nproperty uchar blue\n")
@@ -320,6 +328,7 @@ def write_interactive_review_html(
     quality: dict[str, Any],
     seed: int,
     camera: dict[str, Any] | None = None,
+    clamp_center_camera_m: np.ndarray | None = None,
 ) -> None:
     scene_sample = _sample_points(scene_points, 30000, seed)
     scene_color_sample = _sample_colors(scene_colors, len(scene_sample), len(scene_points), seed)
@@ -366,6 +375,7 @@ def write_interactive_review_html(
         "scene_colors": scene_color_sample,
         "camera": camera_view,
         "registration": registration,
+        "clamp_center_camera_m": None if clamp_center_camera_m is None else np.asarray(clamp_center_camera_m, dtype=float).tolist(),
     }
     data_json = json.dumps(view_data, ensure_ascii=False, separators=(",", ":"))
     title = "Visible Grasp Registration 3D Review"
@@ -520,11 +530,15 @@ function fillInfo() {{
   ].join("");
 }}
 function allPoints() {{ const group = activeGroup(); return [...group.visible, ...group.model, ...data.scene.slice(0, Math.min(data.scene.length, 5000))]; }}
-function focusPoints() {{
+function focusPointsWithoutClamp() {{
   const group = activeGroup();
   if (state.focusMode === "visible" && group.visible.length) return group.visible;
   if (state.focusMode === "cad" && group.model.length) return group.model;
   return allPoints();
+}}
+function focusPoints() {{
+  const pts = focusPointsWithoutClamp();
+  return data.clamp_center_camera_m ? [...pts, data.clamp_center_camera_m] : pts;
 }}
 function add(a,b) {{ return [a[0]+b[0], a[1]+b[1], a[2]+b[2]]; }}
 function sub(a,b) {{ return [a[0]-b[0], a[1]-b[1], a[2]-b[2]]; }}
@@ -707,6 +721,14 @@ function draw() {{
   if (ui.layerModel.checked) drawPoints(group.model, c, s, "#f04438", 1.2, 0.78, null, "solid");
   if (ui.layerCadBox.checked) drawCadBoundingBox(c, s);
   if (ui.layerAxes.checked) drawAxes(c, s);
+  if (data.clamp_center_camera_m) {{
+    const p = project(data.clamp_center_camera_m, c, s);
+    ctx.save(); ctx.globalAlpha = 1; ctx.strokeStyle = "#ff8000"; ctx.fillStyle = "#ff8000";
+    ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(p.x, p.y, 7, 0, Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(p.x-11,p.y); ctx.lineTo(p.x+11,p.y);
+    ctx.moveTo(p.x,p.y-11); ctx.lineTo(p.x,p.y+11); ctx.stroke();
+    ctx.font = "bold 14px sans-serif"; ctx.fillText("Clamp center (flange TCP)",p.x+14,p.y-12); ctx.restore();
+  }}
   drawCameraGizmo();
 }}
 canvas.addEventListener("contextmenu", e => e.preventDefault());

@@ -2,6 +2,8 @@
 
 EmbodiedVG 是插头抓取的视觉侧工程。当前主线使用 YOLO 分割可见插头、在原生 `1920×1080` D2RGB 深度上反投影得到可见点云，再以长轴对称性降维的 CAD profile 和遮挡感知渲染完成配准，最终输出相机系和机器人基座系下的抓取点、头尾语义点与有向长轴。
 
+项目还提供独立的持夹插头校准方法：利用夹爪中心、头尾语义和端部边界完成 CAD 粗配准，再使用带软约束的点到面 ICP 微调。抓取和校准分别使用各自入口；校准使用方法见下方“持夹插头视觉校准”。
+
 ## 当前主线
 
 ```text
@@ -42,6 +44,10 @@ T_base_grasp = T_base_end_current @ T_end_camera @ T_camera_grasp
 
 ```text
 infer_6d_single.py                 单帧 6D 抓取主入口
+infer_6d_batch.py                  批量 6D 抓取入口
+calibration_6d_single.py           单帧持夹插头校准入口
+calibration_6d_batch.py            批量持夹插头校准入口
+plug_vg/calibration_registration.py 校准专用端部约束粗配准与点到面 ICP
 infer.py                           YOLO 分割调试入口
 train.py / val.py                  分割训练与验证
 plug_vg/                           点云、配准、语义点和坐标变换模块
@@ -105,10 +111,11 @@ python -m unittest discover -s tests
 
 | 用途 | 默认文件 |
 |---|---|
-| YOLO 分割权重 | `ultralytics/runs/segment/plug_yolo26s_seg_20260529-2/weights/best.pt` |
+| 抓取 YOLO 分割权重 | `ultralytics/runs/segment/plug_yolo26n_seg_20260814/weights/best.pt` |
+| 校准头尾 YOLO 分割权重 | `ultralytics/runs/segment/plug_yolo26n_seg_20260904/weights/best.pt` |
 | 插头模型 | `configs/plug_models/plugCAD.yaml` |
 | 相机内参 | `configs/camera/plug_rgbd.yaml` |
-| 手眼标定 | `hand_eye_calibration/eye_hand_data/calib_20260618/hand_eye_result_in-hand.yaml` |
+| 手眼标定 | `hand_eye_calibration/eye_hand_data/calib_20260812_PARK/hand_eye_result_in-hand.yaml` |
 | 机器人约定 | `configs/robot/cs_robot.yaml` |
 
 当前 D2RGB 配置为 `1920 x 1080`，深度单位缩放为 `0.001 m`；输入支持项目已使用的 D2RGB PNG/NPY 格式。
@@ -158,6 +165,87 @@ PowerShell 的换行符是反引号 `` ` ``，反引号后不要再放空格。
 
 当前对称主线采用双掩膜：5 px 内缩掩膜提供高置信度 proposal 点，原始掩膜和完整 D2RGB 用于最终可见性评分。观测点只做绝对深度范围过滤和一次 4 mm 体素质心降采样，不使用会误删近光轴有效几何的全局 Z-MAD，也不执行 SOR。配准把绕长轴 roll 作为任务等价自由度，在轴向/径向 CAD 距离场上以鲁棒损失生成有向长轴与抓取中心候选，再用遮挡感知 CAD 可见轮廓和一维轴向搜索统一排序。运行时没有 fitness/RMSE 拒绝门；只要输入有效且存在有限解，就输出最佳几何估计。
 
+## 持夹插头视觉校准
+
+仅在 `calibration_6d_single.py` 和 `calibration_6d_batch.py` 中使用 `--registration-method calibration` 启用新方法。省略该参数仍使用 `symmetric`；抓取入口不支持 `calibration`，抓取工作流保持独立。
+
+- `--clamp-center-end X Y Z`：夹爪中心在法兰 `Link_6` 坐标系中的位置，单位米，默认 `[0, 0, 0.420]`，即沿法兰 +Z 偏移420mm。该参数不是基座系位置。
+- 校准入口有夹爪中心参数时（包括上述默认值），掩膜图、RGB 投影图、交互 HTML、可见点云 PLY 和配准对比 PLY 都绘制橙色夹爪中心。它与 CAD 的 `grasp_center` 分别标识；PLY 标记球仅用于显示，不参与配准。中心不在 RGB 视野内时，图像显示文字说明。
+- `--robot-pose`：拍摄时的法兰位姿。以下命令使用 `test_gt_20260902` 五帧约定的固定值；处理其他拍摄数据时应填写对应实际位姿。
+- 校准分割保留 `plug_head` / `plug_tail` 类别；空间连通性预处理剔除远处异常深度，端部约束粗配准后使用点到面 ICP 微调。运行时不读取真值，不调用抓取配准作为初值或回退。
+- 输出字段和坐标链与抓取入口兼容。`grasp_center` 仍是距 CAD 头部90mm的固定材料点，与输入夹爪中心不是同一个定义；roll 为辅助自由度，未验收其精度。
+- 新方法使用已验证的固定候选、ICP和先验设置；旧方法的 `--icp-threshold`、`--icp-iterations` 等参数不改变校准求解器的配置。
+
+### 单帧校准
+
+Ubuntu / bash：
+
+```bash
+conda activate embodiedvg
+python calibration_6d_single.py \
+  --rgb test_gt_20260902/20260902_133046_461_color.png \
+  --d2rgb test_gt_20260902/20260902_133046_461_d2rgb.npy \
+  --robot-pose -0.014293 0.460711 0.742759 2.167158 0.044541 -3.126827 \
+  --registration-method calibration \
+  --clamp-center-end 0 0 0.420 \
+  --output-dir output/calibration_single \
+  --save-ply \
+  --save-review
+```
+
+Windows PowerShell：
+
+```powershell
+conda activate embodiedvg
+python calibration_6d_single.py `
+  --rgb test_gt_20260902\20260902_133046_461_color.png `
+  --d2rgb test_gt_20260902\20260902_133046_461_d2rgb.npy `
+  --robot-pose -0.014293 0.460711 0.742759 2.167158 0.044541 -3.126827 `
+  --registration-method calibration `
+  --clamp-center-end 0 0 0.420 `
+  --output-dir output\calibration_single `
+  --save-ply `
+  --save-review
+```
+
+### 批量校准
+
+Ubuntu / bash：
+
+```bash
+conda activate embodiedvg
+python calibration_6d_batch.py \
+  --input-dir test_gt_20260902 \
+  --robot-pose -0.014293 0.460711 0.742759 2.167158 0.044541 -3.126827 \
+  --registration-method calibration \
+  --clamp-center-end 0 0 0.420 \
+  --output-dir output/calibration_batch \
+  --save-ply \
+  --save-review
+```
+
+Windows PowerShell：
+
+```powershell
+conda activate embodiedvg
+python calibration_6d_batch.py `
+  --input-dir test_gt_20260902 `
+  --robot-pose -0.014293 0.460711 0.742759 2.167158 0.044541 -3.126827 `
+  --registration-method calibration `
+  --clamp-center-end 0 0 0.420 `
+  --output-dir output\calibration_batch `
+  --save-ply `
+  --save-review
+```
+
+### 已验证结果与性能
+
+`test_gt_20260902` 五帧已完成视觉复核，单帧／批量结果一致。相同 GPU 下，两方法分别预热五帧，再交替运行20轮五帧批次，各100帧全部成功。新方法核心 P50／P95 为 **207／271ms**，旧 `symmetric` 为 **234／256ms**，满足两项均不超过旧方法120%的要求。
+
+这是预热后的分割、观测处理、配准及坐标变换耗时，排除了加载与文件写入。新方法使用四个常驻 CPU 工作进程缓存 CAD；独立冷启动单帧曾实测约4.40秒，不能用上述核心耗时代表冷启动总延迟。真值误差仅供参考，不宣称通过10mm真值精度门槛。
+
+结果图与各阶段记录见 [校准结果入口](output/calibration_endpoint_icp/index.html)，运行及基准详情见 [校准实现与验收报告](docs/calibration_endpoint_icp_report.md)。这些结果产物需在完成本地推理的工作区中查看。
+
 ## 输出产物
 
 对于输入 `<sample>_color.png`，主要产物为：
@@ -166,7 +254,7 @@ PowerShell 的换行符是反引号 `` ` ``，反引号后不要再放空格。
 |---|---|---|
 | `<sample>_color_6d_base.json` | 始终 | 状态、质量、语义点、位姿、变换链与耗时 |
 | `<sample>_color_visible_mask.jpg` | `--save-overlay` 或 `--save-review` | YOLO 可见掩膜 |
-| `<sample>_color_visible_points.ply` | `--save-ply` 或 `--save-review` | RGB 相机系下的目标可见点云（仅 XYZ） |
+| `<sample>_color_visible_points.ply` | `--save-ply` 或 `--save-review` | RGB 相机系下的目标可见点云；抓取入口仅 XYZ，校准入口有夹爪中心时附带颜色及橙色标记球 |
 | `<sample>_color_rgb_projection.jpg` | `--save-review` 且存在候选变换 | 掩膜与 tail/grasp/head 的 RGB 投影 |
 | `<sample>_color_registration_review.html` | `--save-review` | 全场景、可见点、CAD、包围盒、相机视锥与抓取轴的交互复核 |
 | `<sample>_color_point_cloud_comparison.ply` | `--save-review` | RGB 相机系下的对比点云：绿色为 D2RGB 观测，红色为已配准 CAD；黄色、青色、紫色点球分别标记抓取中心、尾部中心、头部中心 |
