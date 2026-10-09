@@ -27,7 +27,7 @@ class AxeleraBackend(BaseBackend):
             from axelera.runtime import op
         except ImportError:
             check_requirements(
-                "axelera-rt==1.6.0",
+                "axelera-rt==1.7.0",
                 cmds="--extra-index-url https://software.axelera.ai/artifactory/api/pypi/axelera-pypi/simple",
             )
 
@@ -40,12 +40,7 @@ class AxeleraBackend(BaseBackend):
 
         self.model = op.load(str(found)).optimized()
 
-        # Load metadata
-        metadata_file = found.parent / "metadata.yaml"
-        if metadata_file.exists():
-            from ultralytics.utils import YAML
-
-            self.apply_metadata(YAML.load(metadata_file))
+        self.apply_metadata(self.read_metadata(found))
 
     def forward(self, im: torch.Tensor) -> list:
         """Run inference on the Axelera hardware accelerator.

@@ -50,10 +50,10 @@ r'''
 
 # Ubuntu / bash
 python infer_6d_single.py \
-  --rgb test_20260701/20260701_160417_537_color.png \
-  --d2rgb test_20260701/20260701_160417_537_d2rgb.npy \
+  --rgb test_20260924/20260924_103741.png \
+  --d2rgb test_20260924/20260924_103741_d2rgb.npy \
   --robot-pose -0.014293 0.460711 0.742759 2.167158 0.044541 -3.126827 \
-  --output-dir output/test_0814 \
+  --output-dir output/test_0924 \
   --save-ply \
   --save-review
 

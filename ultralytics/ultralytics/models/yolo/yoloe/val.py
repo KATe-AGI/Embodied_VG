@@ -11,7 +11,7 @@ from torch.nn import functional as F
 
 from ultralytics.data import YOLOConcatDataset, build_dataloader, build_yolo_dataset
 from ultralytics.data.augment import LoadVisualPrompt
-from ultralytics.data.utils import check_det_dataset
+from ultralytics.data.utils import check_det_dataset, get_split_fraction
 from ultralytics.models.yolo.detect import DetectionValidator
 from ultralytics.models.yolo.segment import SegmentationValidator
 from ultralytics.nn.modules.head import YOLOEDetect
@@ -115,6 +115,7 @@ class YOLOEDetectValidator(DetectionValidator):
             data,
             mode="val",
             rect=False,
+            fraction=get_split_fraction(self.args.fraction, self.args.split or "val"),
         )
         if isinstance(dataset, YOLOConcatDataset):
             for d in dataset.datasets:
@@ -127,9 +128,9 @@ class YOLOEDetectValidator(DetectionValidator):
             self.args.workers,
             shuffle=False,
             rank=-1,
+            device=self.device,
         )
 
-    @smart_inference_mode()
     def __call__(
         self,
         trainer: Any | None = None,
@@ -159,7 +160,7 @@ class YOLOEDetectValidator(DetectionValidator):
 
             if load_vp:
                 LOGGER.info("Validate using the visual prompt.")
-                self.args.half = False
+                self.args.quantize = None
                 # Directly use the same dataloader for visual embeddings extracted during training
                 vpe = self.get_visual_pe(self.dataloader, model)
                 model.set_classes(names, vpe)
@@ -192,7 +193,7 @@ class YOLOEDetectValidator(DetectionValidator):
 
             if load_vp:
                 LOGGER.info("Validate using the visual prompt.")
-                self.args.half = False
+                self.args.quantize = None
                 dataloader = self.get_vpe_dataloader(data)
                 vpe = self.get_visual_pe(dataloader, model)
                 model.set_classes(names, vpe)
@@ -209,5 +210,3 @@ class YOLOEDetectValidator(DetectionValidator):
 
 class YOLOESegValidator(YOLOEDetectValidator, SegmentationValidator):
     """YOLOE segmentation validator that supports both text and visual prompt embeddings."""
-
-    pass

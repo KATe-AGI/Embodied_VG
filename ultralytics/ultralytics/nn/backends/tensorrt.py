@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections import OrderedDict, namedtuple
 from pathlib import Path
 
@@ -19,7 +18,7 @@ class TensorRTBackend(BaseBackend):
     """NVIDIA TensorRT inference backend for GPU-accelerated deployment.
 
     Loads and runs inference with NVIDIA TensorRT serialized engines (.engine files). Supports both TensorRT 7-9 and
-    TensorRT 10+ APIs, dynamic input shapes, FP16 precision, and DLA core offloading.
+    TensorRT 10/11 APIs, dynamic input shapes, FP16 precision, and DLA core offloading.
     """
 
     def load_model(self, weight: str | Path) -> None:
@@ -49,29 +48,25 @@ class TensorRTBackend(BaseBackend):
         logger = trt.Logger(trt.Logger.INFO)
 
         # Read engine file
+        offset, metadata = self.engine_header(weight)
         with open(weight, "rb") as f, trt.Runtime(logger) as runtime:
-            try:
-                meta_len = int.from_bytes(f.read(4), byteorder="little")
-                metadata = json.loads(f.read(meta_len).decode("utf-8"))
-                dla = metadata.get("dla", None)
-                if dla is not None:
-                    runtime.DLA_core = int(dla)
-            except UnicodeDecodeError:
-                f.seek(0)
-                metadata = None
+            f.seek(offset)  # skip the metadata header, if any, that precedes the engine
+            if (dla := metadata.get("dla")) is not None:
+                runtime.DLA_core = int(dla)
             engine = runtime.deserialize_cuda_engine(f.read())
             self.apply_metadata(metadata)
         try:
             self.context = engine.create_execution_context()
-        except Exception as e:
+        except Exception:
             LOGGER.error("TensorRT model exported with a different version than expected\n")
-            raise e
+            raise
 
         # Setup bindings
         self.bindings = OrderedDict()
         self.output_names = []
         self.fp16 = False
         self.dynamic = False
+        # TensorRT 10 and 11 both drop the legacy binding API in favor of named I/O tensors
         self.is_trt10 = not hasattr(engine, "num_bindings")
         num = range(engine.num_io_tensors) if self.is_trt10 else range(engine.num_bindings)
 

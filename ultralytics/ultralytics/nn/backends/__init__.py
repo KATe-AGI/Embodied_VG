@@ -6,26 +6,37 @@ Each backend implements the `BaseBackend` interface and can be used independentl
 `AutoBackend` dispatcher for automatic format detection and inference routing.
 """
 
+from .ascend import AscendBackend
 from .axelera import AxeleraBackend
 from .base import BaseBackend
+from .coreai import CoreAIBackend
 from .coreml import CoreMLBackend
+from .deepx import DeepXBackend
 from .executorch import ExecuTorchBackend
+from .hailo import HailoBackend
+from .litert import LiteRTBackend
 from .mnn import MNNBackend
 from .ncnn import NCNNBackend
 from .onnx import ONNXBackend, ONNXIMXBackend
 from .openvino import OpenVINOBackend
 from .paddle import PaddleBackend
 from .pytorch import PyTorchBackend, TorchScriptBackend
+from .qnn import QNNBackend
 from .rknn import RKNNBackend
 from .tensorflow import TensorFlowBackend
 from .tensorrt import TensorRTBackend
 from .triton import TritonBackend
 
 __all__ = [
+    "AscendBackend",
     "AxeleraBackend",
     "BaseBackend",
+    "CoreAIBackend",
     "CoreMLBackend",
+    "DeepXBackend",
     "ExecuTorchBackend",
+    "HailoBackend",
+    "LiteRTBackend",
     "MNNBackend",
     "NCNNBackend",
     "ONNXBackend",
@@ -33,6 +44,7 @@ __all__ = [
     "OpenVINOBackend",
     "PaddleBackend",
     "PyTorchBackend",
+    "QNNBackend",
     "RKNNBackend",
     "TensorFlowBackend",
     "TensorRTBackend",

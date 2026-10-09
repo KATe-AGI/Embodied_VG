@@ -8,6 +8,7 @@ pillow>=10.0
 matplotlib>=3.8
 requests>=2.31
 psutil>=5.9
+tqdm>=4.66
 polars>=0.20
 ultralytics-thop>=2.0.18
 -e ./ultralytics

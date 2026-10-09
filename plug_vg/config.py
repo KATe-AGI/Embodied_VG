@@ -19,7 +19,6 @@ DEFAULT_CAMERA = ROOT / "configs" / "camera" / "plug_rgbd.yaml"
 DEFAULT_MANIFEST = RGBD_TEST / "meta" / "frame_manifest.csv"
 
 DEFAULT_SEG_WEIGHTS = ULTRALYTICS_DIR / "runs" / "segment" / "plug_yolo26n_seg_20260814" / "weights" / "best.pt"
-CALIBRATION_SEG_WEIGHTS = ULTRALYTICS_DIR / "runs" / "segment" / "plug_yolo26n_seg_20260904" / "weights" / "best.pt"
 
 
 def load_camera(path: Path) -> dict[str, Any]:

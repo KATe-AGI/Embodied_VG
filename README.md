@@ -2,7 +2,7 @@
 
 EmbodiedVG 是插头抓取的视觉侧工程。当前主线使用 YOLO 分割可见插头、在原生 `1920×1080` D2RGB 深度上反投影得到可见点云，再以长轴对称性降维的 CAD profile 和遮挡感知渲染完成配准，最终输出相机系和机器人基座系下的抓取点、头尾语义点与有向长轴。
 
-项目还提供独立的持夹插头校准方法：利用夹爪中心、头尾语义和端部边界完成 CAD 粗配准，再使用带软约束的点到面 ICP 微调。抓取和校准分别使用各自入口；校准使用方法见下方“持夹插头视觉校准”。
+项目还提供夹爪抓取状态检测：通过 YOLO 检测模型判断夹爪是否抓住插头，支持单张 RGB 图像、离线视频和实时视频流。
 
 ## 当前主线
 
@@ -45,11 +45,11 @@ T_base_grasp = T_base_end_current @ T_end_camera @ T_camera_grasp
 ```text
 infer_6d_single.py                 单帧 6D 抓取主入口
 infer_6d_batch.py                  批量 6D 抓取入口
-calibration_6d_single.py           单帧持夹插头校准入口
-calibration_6d_batch.py            批量持夹插头校准入口
-plug_vg/calibration_registration.py 校准专用端部约束粗配准与点到面 ICP
+infer_gripper_plug_single.py       图像/视频/实时流夹爪抓取状态检测
 infer.py                           YOLO 分割调试入口
-train.py / val.py                  分割训练与验证
+train.py                          YOLO 分割/检测训练
+val.py                            分割验证
+augmentation.yaml                 按任务选择的数据增强策略
 plug_vg/                           点云、配准、语义点和坐标变换模块
 evaluation/                        相机系真值评估与留一模块比较
 configs/camera/plug_rgbd.yaml      RGB/D2RGB 相机内参
@@ -87,6 +87,8 @@ pip install -r requirement.txt
 
 `requirement.txt` 会以 editable 方式安装项目内的 `./ultralytics`，因此迁移项目时必须保留该目录。日常推理不需要 CadQuery；只有重建 `plugCAD.stp` 时才需要额外提供 `cadquery` Python 包。
 
+本项目随仓库保存的 Ultralytics 版本为 `8.4.138`。数据集、模型权重、CAD 资产和训练/推理结果保存在本地，不随 GitHub 仓库分发；在新环境运行前需准备相应资产，或通过命令行参数指定自己的路径。
+
 ### 安装验证
 
 Ubuntu / bash：
@@ -112,7 +114,7 @@ python -m unittest discover -s tests
 | 用途 | 默认文件 |
 |---|---|
 | 抓取 YOLO 分割权重 | `ultralytics/runs/segment/plug_yolo26n_seg_20260814/weights/best.pt` |
-| 校准头尾 YOLO 分割权重 | `ultralytics/runs/segment/plug_yolo26n_seg_20260904/weights/best.pt` |
+| 夹爪状态 YOLO 检测权重 | `ultralytics/runs/detect/plug_yolo26n_det_20261009/weights/best.pt` |
 | 插头模型 | `configs/plug_models/plugCAD.yaml` |
 | 相机内参 | `configs/camera/plug_rgbd.yaml` |
 | 手眼标定 | `hand_eye_calibration/eye_hand_data/calib_20260812_PARK/hand_eye_result_in-hand.yaml` |
@@ -165,86 +167,73 @@ PowerShell 的换行符是反引号 `` ` ``，反引号后不要再放空格。
 
 当前对称主线采用双掩膜：5 px 内缩掩膜提供高置信度 proposal 点，原始掩膜和完整 D2RGB 用于最终可见性评分。观测点只做绝对深度范围过滤和一次 4 mm 体素质心降采样，不使用会误删近光轴有效几何的全局 Z-MAD，也不执行 SOR。配准把绕长轴 roll 作为任务等价自由度，在轴向/径向 CAD 距离场上以鲁棒损失生成有向长轴与抓取中心候选，再用遮挡感知 CAD 可见轮廓和一维轴向搜索统一排序。运行时没有 fitness/RMSE 拒绝门；只要输入有效且存在有限解，就输出最佳几何估计。
 
-## 持夹插头视觉校准
+## 夹爪抓取状态判断
 
-仅在 `calibration_6d_single.py` 和 `calibration_6d_batch.py` 中使用 `--registration-method calibration` 启用新方法。省略该参数仍使用 `symmetric`；抓取入口不支持 `calibration`，抓取工作流保持独立。
-
-- `--clamp-center-end X Y Z`：夹爪中心在法兰 `Link_6` 坐标系中的位置，单位米，默认 `[0, 0, 0.420]`，即沿法兰 +Z 偏移420mm。该参数不是基座系位置。
-- 校准入口有夹爪中心参数时（包括上述默认值），掩膜图、RGB 投影图、交互 HTML、可见点云 PLY 和配准对比 PLY 都绘制橙色夹爪中心。它与 CAD 的 `grasp_center` 分别标识；PLY 标记球仅用于显示，不参与配准。中心不在 RGB 视野内时，图像显示文字说明。
-- `--robot-pose`：拍摄时的法兰位姿。以下命令使用 `test_gt_20260902` 五帧约定的固定值；处理其他拍摄数据时应填写对应实际位姿。
-- 校准分割保留 `plug_head` / `plug_tail` 类别；空间连通性预处理剔除远处异常深度，端部约束粗配准后使用点到面 ICP 微调。运行时不读取真值，不调用抓取配准作为初值或回退。
-- 输出字段和坐标链与抓取入口兼容。`grasp_center` 仍是距 CAD 头部90mm的固定材料点，与输入夹爪中心不是同一个定义；roll 为辅助自由度，未验收其精度。
-- 新方法使用已验证的固定候选、ICP和先验设置；旧方法的 `--icp-threshold`、`--icp-iterations` 等参数不改变校准求解器的配置。
-
-### 单帧校准
-
-Ubuntu / bash：
+`infer_gripper_plug_single.py` 使用 YOLO 检测模型判断 RGB 图像或视频中的夹爪状态，不需要深度图、机器人位姿或 CAD 配准。
 
 ```bash
 conda activate embodiedvg
-python calibration_6d_single.py \
-  --rgb test_gt_20260902/20260902_133046_461_color.png \
-  --d2rgb test_gt_20260902/20260902_133046_461_d2rgb.npy \
-  --robot-pose -0.014293 0.460711 0.742759 2.167158 0.044541 -3.126827 \
-  --registration-method calibration \
-  --clamp-center-end 0 0 0.420 \
-  --output-dir output/calibration_single \
-  --save-ply \
-  --save-review
+python infer_gripper_plug_single.py \
+  --rgb '检测标注（已标注）_yolo/images/val/v01_s000015_h1_t000015600_f0000468.png' \
+  --output-dir output/gripper_plug_single \
+  --save-visualization \
+  --device 0
 ```
 
-Windows PowerShell：
+类别 `0` 输出 `gripper_with_plug`，类别 `1` 输出 `gripper_without_plug`；未检测到夹爪时输出 `no_detection`。终端打印英文状态、类别、置信度、输出目录和模型加载/YOLO/端到端耗时；单图结果 JSON 保存到 `<output-dir>/<图像名>_gripper_plug.json`。指定 `--save-visualization`（或 `--save-overlay`）时，单图额外保存 JPG，视频额外保存带检测结果的 MP4。默认输出目录为 `ultralytics/runs/gripper_plug_single`，默认权重为 `ultralytics/runs/detect/plug_yolo26n_det_20261009/weights/best.pt`；可通过 `--weights` 和 `--conf` 覆盖。
 
-```powershell
-conda activate embodiedvg
-python calibration_6d_single.py `
-  --rgb test_gt_20260902\20260902_133046_461_color.png `
-  --d2rgb test_gt_20260902\20260902_133046_461_d2rgb.npy `
-  --robot-pose -0.014293 0.460711 0.742759 2.167158 0.044541 -3.126827 `
-  --registration-method calibration `
-  --clamp-center-end 0 0 0.420 `
-  --output-dir output\calibration_single `
-  --save-ply `
-  --save-review
-```
-
-### 批量校准
-
-Ubuntu / bash：
+视频输入会复用同一个 YOLO 模型逐帧推理，结果 JSON 中包含每个已处理帧的状态、类别、置信度和时间戳。`--frame-stride 2` 可每隔一帧处理一次，减少推理量，同时保持可视化视频的原始帧率：
 
 ```bash
-conda activate embodiedvg
-python calibration_6d_batch.py \
-  --input-dir test_gt_20260902 \
-  --robot-pose -0.014293 0.460711 0.742759 2.167158 0.044541 -3.126827 \
-  --registration-method calibration \
-  --clamp-center-end 0 0 0.420 \
-  --output-dir output/calibration_batch \
-  --save-ply \
-  --save-review
+python infer_gripper_plug_single.py \
+  --video input/gripper.mp4 \
+  --output-dir output/gripper_plug_video \
+  --frame-stride 1 \
+  --save-overlay \
+  --device 0
 ```
 
-Windows PowerShell：
+处理离线视频时，终端会显示 `tqdm` 帧进度。实时输入使用 `--camera`（或别名 `--stream`），参数可以是摄像头编号、设备路径或 RTSP/HTTP 地址。指定 `--show` 可打开实时检测窗口，按 `q` 退出；不打开窗口时可用 `Ctrl+C` 退出：
 
-```powershell
-conda activate embodiedvg
-python calibration_6d_batch.py `
-  --input-dir test_gt_20260902 `
-  --robot-pose -0.014293 0.460711 0.742759 2.167158 0.044541 -3.126827 `
-  --registration-method calibration `
-  --clamp-center-end 0 0 0.420 `
-  --output-dir output\calibration_batch `
-  --save-ply `
-  --save-review
+```bash
+python infer_gripper_plug_single.py \
+  --camera 0 \
+  --output-dir output/gripper_plug_live \
+  --show \
+  --device 0
 ```
 
-### 已验证结果与性能
+实时模式会定期在终端刷新当前帧的状态、类别和置信度，并在退出后保存汇总 JSON。需要限制测试时长可使用 `--max-frames N`；指定 `--save-overlay` 会把实时结果保存为 `live_gripper_plug.mp4`。
 
-`test_gt_20260902` 五帧已完成视觉复核，单帧／批量结果一致。相同 GPU 下，两方法分别预热五帧，再交替运行20轮五帧批次，各100帧全部成功。新方法核心 P50／P95 为 **207／271ms**，旧 `symmetric` 为 **234／256ms**，满足两项均不超过旧方法120%的要求。
+网络摄像头可使用 `--stream 'rtsp://camera-ip/stream'`。实时 JSON 保存为 `live_gripper_plug.json`，包含类别统计和最后一帧的结果；离线 JSON 保存全部已处理帧的结果。模型在每次运行中只加载一次，首次预测包含初始化/预热开销，终端的 YOLO 耗时包含预测调用的预处理与后处理。
 
-这是预热后的分割、观测处理、配准及坐标变换耗时，排除了加载与文件写入。新方法使用四个常驻 CPU 工作进程缓存 CAD；独立冷启动单帧曾实测约4.40秒，不能用上述核心耗时代表冷启动总延迟。真值误差仅供参考，不宣称通过10mm真值精度门槛。
+## 检测数据集与训练
 
-结果图与各阶段记录见 [校准结果入口](output/calibration_endpoint_icp/index.html)，运行及基准详情见 [校准实现与验收报告](docs/calibration_endpoint_icp_report.md)。这些结果产物需在完成本地推理的工作区中查看。
+检测标注使用 LabelMe 矩形，标签 `0` 为 `gripper_with_plug`、`1` 为 `gripper_without_plug`。将原始数据放到 `检测标注（已标注）` 的各子目录后执行：
+
+```bash
+python tools/convert_gripper_detection.py \
+  --source '检测标注（已标注）' \
+  --output '检测标注（已标注）_yolo'
+```
+
+转换器仅纳入有对应 JSON 的图像；空标注作为背景样本。按类别分层进行 8:2 划分，默认随机种子为 `42`，输出包含 `images/train`、`images/val`、`labels/train`、`labels/val`、`data.yaml` 和划分清单。工具详情见 `tools/DATASET_TOOLS.md`。
+
+使用 YOLO26n 检测模型训练：
+
+```bash
+python train.py \
+  --task detect \
+  --model yolo26n.pt \
+  --data '检测标注（已标注）_yolo/data.yaml' \
+  --epochs 150 \
+  --project ultralytics/runs/detect \
+  --name plug_yolo26n_det_20261009
+```
+
+`train.py` 根据 `--task` 从同目录的 `augmentation.yaml` 加载策略。检测策略采用 YOLO 默认增强并增加上下翻转（`flipud=0.5`）。默认 `imgsz=640`、`batch=32`、`workers=8`、`patience=10`；150 为 epoch 上限，连续 10 个 epoch 无提升时提前结束。需要完整运行 150 个 epoch 可设置 `--patience 0`。脚本默认任务仍为分割，检测训练需显式指定上面的模型、数据和输出目录。
+
+本地本次数据集包含 402 张训练图像、100 张验证图像，训练在第 49 个 epoch 早停，最佳权重来自第 39 个 epoch。最佳模型在此验证集上 P/R/mAP50/mAP50–95 为 `0.954/1.000/0.995/0.969`；这些指标代表本次划分的结果。
 
 ## 输出产物
 
@@ -254,7 +243,7 @@ python calibration_6d_batch.py `
 |---|---|---|
 | `<sample>_color_6d_base.json` | 始终 | 状态、质量、语义点、位姿、变换链与耗时 |
 | `<sample>_color_visible_mask.jpg` | `--save-overlay` 或 `--save-review` | YOLO 可见掩膜 |
-| `<sample>_color_visible_points.ply` | `--save-ply` 或 `--save-review` | RGB 相机系下的目标可见点云；抓取入口仅 XYZ，校准入口有夹爪中心时附带颜色及橙色标记球 |
+| `<sample>_color_visible_points.ply` | `--save-ply` 或 `--save-review` | RGB 相机系下的目标可见点云 |
 | `<sample>_color_rgb_projection.jpg` | `--save-review` 且存在候选变换 | 掩膜与 tail/grasp/head 的 RGB 投影 |
 | `<sample>_color_registration_review.html` | `--save-review` | 全场景、可见点、CAD、包围盒、相机视锥与抓取轴的交互复核 |
 | `<sample>_color_point_cloud_comparison.ply` | `--save-review` | RGB 相机系下的对比点云：绿色为 D2RGB 观测，红色为已配准 CAD；黄色、青色、紫色点球分别标记抓取中心、尾部中心、头部中心 |

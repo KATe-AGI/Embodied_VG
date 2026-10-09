@@ -72,29 +72,59 @@ def draw_axes_3d(ax, origin: np.ndarray, scale: float) -> None:
     ]
     for label, direction, color in axes:
         end = origin + direction * scale
-        ax.quiver(origin[0], origin[1], origin[2], direction[0], direction[1], direction[2], length=scale, color=color, linewidth=2.2)
-        ax.text(end[0], end[1], end[2], label, color=color, fontsize=9)
+        ax.quiver(
+            origin[0], origin[1], origin[2],
+            direction[0], direction[1], direction[2],
+            length=scale, color=color, linewidth=3.0, arrow_length_ratio=0.12,
+        )
+        ax.text(
+            end[0], end[1], end[2], f" {label}", color=color, fontsize=10,
+            fontweight="bold", bbox={"facecolor": "white", "alpha": 0.78, "edgecolor": "none", "pad": 1.5},
+        )
 
 
 def draw_projection(ax, points: np.ndarray, dims: tuple[int, int], semantic: dict[str, np.ndarray], title: str) -> None:
     a, b = dims
-    ax.scatter(points[:, a], points[:, b], s=0.5, c="#5b6472", alpha=0.25, linewidths=0)
+    ax.scatter(points[:, a], points[:, b], s=1.15, c="#344054", alpha=0.68, linewidths=0, rasterized=True)
     styles = {
         "grasp_center": ("o", "#ffffff", "#111827", 70),
         "tail_center": ("^", "#255e9e", "#102a43", 70),
         "head_center": ("s", "#d92d20", "#7a271a", 70),
     }
+    label_offsets = {
+        "grasp_center": (7, 9),
+        "tail_center": (7, -16),
+        "head_center": (7, 9),
+    }
+    # All semantic points coincide in the YZ projection. Separate their labels
+    # vertically so the coordinate-system semantics remain readable.
+    if dims == (1, 2):
+        label_offsets = {
+            "grasp_center": (9, 19),
+            "tail_center": (9, 2),
+            "head_center": (9, -15),
+        }
     for name, point in semantic.items():
         marker, face, edge, size = styles[name]
-        ax.scatter(point[a], point[b], marker=marker, s=size, c=face, edgecolors=edge, linewidths=1.2, zorder=5)
-        ax.text(point[a], point[b], f" {name}", fontsize=8, color=edge, zorder=6)
+        ax.scatter(point[a], point[b], marker=marker, s=size + 20, c=face, edgecolors=edge, linewidths=1.6, zorder=5)
+        ax.annotate(
+            name,
+            xy=(point[a], point[b]),
+            xytext=label_offsets[name],
+            textcoords="offset points",
+            fontsize=9,
+            fontweight="bold",
+            color=edge,
+            zorder=6,
+            bbox={"facecolor": "white", "alpha": 0.88, "edgecolor": "none", "pad": 1.2},
+        )
     ax.axhline(0.0, color="#d0d5dd", linewidth=0.8)
     ax.axvline(0.0, color="#d0d5dd", linewidth=0.8)
     ax.set_title(title)
     ax.set_xlabel(["X tail->head (m)", "Y closing (m)", "Z approach (m)"][a])
     ax.set_ylabel(["X tail->head (m)", "Y closing (m)", "Z approach (m)"][b])
     ax.set_aspect("equal", adjustable="box")
-    ax.grid(True, alpha=0.25)
+    ax.grid(True, color="#98a2b3", alpha=0.32, linewidth=0.7)
 
 
 def render_review(config_path: Path, output_dir: Path, max_points: int, seed: int) -> tuple[Path, Path]:
@@ -117,7 +147,11 @@ def render_review(config_path: Path, output_dir: Path, max_points: int, seed: in
 
     fig = plt.figure(figsize=(16, 11))
     ax3d = fig.add_subplot(2, 2, 1, projection="3d")
-    ax3d.scatter(points[:, 0], points[:, 1], points[:, 2], s=0.4, c="#475467", alpha=0.22, depthshade=False)
+    ax3d.scatter(
+        points[:, 0], points[:, 1], points[:, 2],
+        s=1.0, c="#344054", alpha=0.58, linewidths=0,
+        depthshade=True, rasterized=True,
+    )
     ax3d.scatter(*semantic["grasp_center"], marker="o", s=70, c="#ffffff", edgecolors="#111827", linewidths=1.4, label="grasp_center")
     ax3d.scatter(*semantic["tail_center"], marker="^", s=80, c="#255e9e", edgecolors="#102a43", linewidths=1.2, label="tail_center")
     ax3d.scatter(*semantic["head_center"], marker="s", s=80, c="#d92d20", edgecolors="#7a271a", linewidths=1.2, label="head_center")
@@ -140,7 +174,7 @@ def render_review(config_path: Path, output_dir: Path, max_points: int, seed: in
         fontsize=13,
     )
     fig.tight_layout(rect=(0, 0, 1, 0.97))
-    fig.savefig(image_path, dpi=220)
+    fig.savefig(image_path, dpi=280, facecolor="white", bbox_inches="tight")
     plt.close(fig)
 
     encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")

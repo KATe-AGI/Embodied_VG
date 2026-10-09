@@ -21,9 +21,9 @@ r"""
 # conda activate embodiedvg
 
 python infer_6d_batch.py \
-  --input-dir test_20260705 \
+  --input-dir test_20260923 \
   --robot-pose -0.014293 0.460711 0.742759 2.167158 0.044541 -3.126827 \
-  --output-dir output/test_0825 \
+  --output-dir output/test_0923 \
   --save-ply \
   --save-review
 """
