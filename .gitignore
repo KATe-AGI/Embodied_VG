@@ -11,6 +11,7 @@ venv/
 env/
 .env
 .env.*
+.codex-runs/
 
 # Editor and OS noise
 .DS_Store
@@ -23,6 +24,11 @@ plug_dataset_all_20260520/
 plug_dataset_all_20260529/
 plug_reannotation_20260716/
 yolo_plug_dataset/
+yolo-plug_head_and_tail_dataset/
+v01_成功1/
+v01_成功1_yolo/
+检测标注（已标注）/
+检测标注（已标注）_yolo/
 extra/
 test_*/
 hand_eye_calibration/eye_hand_data/**/*
