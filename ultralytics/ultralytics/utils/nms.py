@@ -58,16 +58,21 @@ def non_max_suppression(
     # Checks
     assert 0 <= conf_thres <= 1, f"Invalid Confidence threshold {conf_thres}, valid values are between 0.0 and 1.0"
     assert 0 <= iou_thres <= 1, f"Invalid IoU {iou_thres}, valid values are between 0.0 and 1.0"
-    if isinstance(prediction, (list, tuple)):  # YOLOv8 model in validation model, output = (inference_out, loss_out)
+    if isinstance(prediction, (list, tuple)):  # YOLOv8 model in validation mode, output = (inference_out, loss_out)
         prediction = prediction[0]  # select only inference output
     if classes is not None:
         classes = torch.tensor(classes, device=prediction.device)
 
     if prediction.shape[-1] == 6 or end2end:  # end-to-end model (BNC, i.e. 1,300,6)
-        output = [pred[pred[:, 4] > conf_thres][:max_det] for pred in prediction]
-        if classes is not None:
-            output = [pred[(pred[:, 5:6] == classes).any(1)] for pred in output]
-        return output
+        output, keepi = [], []
+        for pred in prediction:
+            mask = pred[:, 4] > conf_thres
+            if classes is not None:
+                mask &= (pred[:, 5:6] == classes).any(1)
+            idx = mask.nonzero(as_tuple=False).view(-1)[:max_det]
+            output.append(pred[idx])
+            keepi.append(idx)
+        return (output, keepi) if return_idxs else output
 
     bs = prediction.shape[0]  # batch size (BCN, i.e. 1,84,6300)
     nc = nc or (prediction.shape[1] - 4)  # number of classes
@@ -88,6 +93,7 @@ def non_max_suppression(
     t = time.time()
     output = [torch.zeros((0, 6 + extra), device=prediction.device)] * bs
     keepi = [torch.zeros((0, 1), device=prediction.device)] * bs  # to store the kept idxs
+    use_torchvision = prediction.device.type != "xpu" and "torchvision" in sys.modules
     for xi, (x, xk) in enumerate(zip(prediction, xinds)):  # image index, (preds, preds indices)
         # Apply constraints
         # x[((x[:, 2:4] < min_wh) | (x[:, 2:4] > max_wh)).any(1), 4] = 0  # width-height
@@ -147,8 +153,8 @@ def non_max_suppression(
             i = TorchNMS.fast_nms(boxes, scores, iou_thres, iou_func=batch_probiou)
         else:
             boxes = x[:, :4] + c  # boxes (offset by class)
-            # Speed strategy: torchvision for val or already loaded (faster), TorchNMS for predict (lower latency)
-            if "torchvision" in sys.modules:
+            # Use torchvision if already imported; it has no XPU NMS kernel, but torch_npu CPU-falls back on NPU.
+            if use_torchvision:
                 import torchvision  # scope as slow import
 
                 i = torchvision.ops.nms(boxes, scores, iou_thres)

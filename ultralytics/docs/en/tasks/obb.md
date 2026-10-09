@@ -7,13 +7,11 @@ model_name: yolo26n-obb
 
 # Oriented Bounding Boxes [Object Detection](https://www.ultralytics.com/glossary/object-detection)
 
-<!-- obb task poster -->
+<img width="1024" src="https://cdn.ul.run/i/5358256c7e6abec4c69ca11be99143ba.avif" alt="Ultralytics YOLO oriented bounding box detection of boats in aerial imagery">
 
 Oriented object detection goes a step further than standard object detection by introducing an extra angle to locate objects more accurately in an image.
 
 The output of an oriented object detector is a set of rotated bounding boxes that precisely enclose the objects in the image, along with class labels and confidence scores for each box. Oriented bounding boxes are particularly useful when objects appear at various angles, such as in aerial imagery, where traditional axis-aligned bounding boxes may include unnecessary background.
-
-<!-- youtube video link for obb task -->
 
 !!! tip
 
@@ -32,9 +30,9 @@ The output of an oriented object detector is a set of rotated bounding boxes tha
 
 ## Visual Samples
 
-|                                               Ships Detection using OBB                                               |                                                Vehicle Detection using OBB                                                |
-| :-------------------------------------------------------------------------------------------------------------------: | :-----------------------------------------------------------------------------------------------------------------------: |
-| ![Ships Detection using OBB](https://cdn.jsdelivr.net/gh/ultralytics/assets@main/docs/ships-detection-using-obb.avif) | ![Vehicle Detection using OBB](https://cdn.jsdelivr.net/gh/ultralytics/assets@main/docs/vehicle-detection-using-obb.avif) |
+|                                Ships Detection using OBB                                 |                                Vehicle Detection using OBB                                 |
+| :--------------------------------------------------------------------------------------: | :----------------------------------------------------------------------------------------: |
+| ![Ships Detection using OBB](https://cdn.ul.run/i/c6591549a27062e19a12e83e6c139728.avif) | ![Vehicle Detection using OBB](https://cdn.ul.run/i/bdc446c744810812060cea58a16d9065.avif) |
 
 ## [Models](https://github.com/ultralytics/ultralytics/tree/main/ultralytics/cfg/models/26)
 
@@ -54,7 +52,7 @@ Train YOLO26n-obb on the DOTA8 dataset for 100 [epochs](https://www.ultralytics.
 
 !!! note
 
-    OBB angles are constrained to the range **0–90 degrees** (exclusive of 90). Angles of 90 degrees or greater are not supported.
+    An OBB and its 180° rotation are identical, so rotation is defined modulo 180° and the box has no direction. Training labels are canonicalized to a long-edge form: the box width `w` is the longer side, the angle is measured clockwise from the positive x-axis to the orientation of the `w` edge, and it is stored in radians in **`[-π/4, 3π/4)`** (`[-45°, 135°)`). Predictions are not canonicalized, so a predicted box may report the short edge as `w`; see [Results Output](#results-output). The `[0°, 90°)` form is the regularized DOTA-style convention and is not applied at training or inference.
 
 !!! example
 
@@ -98,9 +96,9 @@ Train YOLO26n-obb on the DOTA8 dataset for 100 [epochs](https://www.ultralytics.
 
 ### Dataset format
 
-OBB dataset format can be found in detail in the [Dataset Guide](../datasets/obb/index.md). The YOLO OBB format designates bounding boxes by their four corner points with coordinates normalized between 0 and 1, following this structure. [Ultralytics Platform](https://platform.ultralytics.com) supports OBB annotation with a dedicated oriented bounding box drawing tool:
+OBB dataset format can be found in detail in the [Dataset Guide](../datasets/obb/index.md). The YOLO OBB format designates bounding boxes by their four corner points with coordinates normalized between 0 and 1, following this structure. [Ultralytics Platform annotation](../platform/data/annotation.md) supports OBB labels with a dedicated oriented bounding box drawing tool:
 
-```
+```text
 class_index x1 y1 x2 y2 x3 y3 x4 y4
 ```
 
@@ -182,6 +180,29 @@ Use a trained YOLO26n-obb model to run predictions on images.
 </p>
 
 See full `predict` mode details in the [Predict](../modes/predict.md) page.
+
+### Results Output
+
+Oriented bounding box detection returns one `Results` object per image. The primary prediction field is `result.obb`,
+which contains rotated boxes, class IDs, and confidence scores for each detected object.
+
+| Attribute             | Type            | Shape     | Description                              |
+| --------------------- | --------------- | --------- | ---------------------------------------- |
+| `result.obb`          | `OBB`           | `(N)`     | Oriented boxes.                          |
+| `result.obb.data`     | `torch.float32` | `(N,7/8)` | Raw rotated boxes with confidence/class. |
+| `result.obb.xywhr`    | `torch.float32` | `(N,5)`   | `xywhr` rotated boxes.                   |
+| `result.obb.xyxyxyxy` | `torch.float32` | `(N,4,2)` | Four corner points.                      |
+| `result.obb.conf`     | `torch.float32` | `(N,)`    | Confidence scores.                       |
+
+Labels are canonicalized to the long-edge convention but predictions are not, so `result.obb.xywhr` may report `w` smaller than `h` with the rotation measured from the short edge. Both forms describe the same rectangle, so `result.obb.xyxyxyxy` is correct either way. Convert the corners back when downstream code needs the long-edge form, keeping in mind that rewriting the box parameters may cyclically shift the corner order:
+
+```python
+from ultralytics.utils.ops import xyxyxyxy2xywhr
+
+xywhr = xyxyxyxy2xywhr(result.obb.xyxyxyxy)  # w >= h, rotation in [-pi/4, 3pi/4)
+```
+
+For task-specific `Results` fields across every task, see the [Predict Results by Task](../modes/predict.md#results-by-task) section.
 
 ## Export
 

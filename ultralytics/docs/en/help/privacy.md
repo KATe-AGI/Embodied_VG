@@ -1,4 +1,5 @@
 ---
+title: Python Package Privacy & Data Collection
 description: Discover how Ultralytics collects and uses anonymized data to enhance the YOLO Python package while prioritizing user privacy and control.
 keywords: Ultralytics, data collection, YOLO, Python package, Google Analytics, Sentry, privacy, anonymized data, user control, crash reporting
 ---
@@ -7,7 +8,7 @@ keywords: Ultralytics, data collection, YOLO, Python package, Google Analytics, 
 
 ## Overview
 
-[Ultralytics](https://www.ultralytics.com/) is dedicated to the continuous enhancement of the user experience and the capabilities of our Python package, including the advanced YOLO models we develop. Our approach involves the gathering of anonymized usage statistics and crash reports, helping us identify opportunities for improvement and ensuring the reliability of our software. This transparency document outlines what data we collect, its purpose, and the choice you have regarding this data collection.
+[Ultralytics](https://www.ultralytics.com) is dedicated to the continuous enhancement of the user experience and the capabilities of our Python package, including the advanced YOLO models we develop. Our approach involves the gathering of anonymized usage statistics and crash reports, helping us identify opportunities for improvement and ensuring the reliability of our software. This transparency document outlines what data we collect, its purpose, and the choice you have regarding this data collection.
 
 ## Anonymized Google Analytics
 

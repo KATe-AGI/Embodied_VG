@@ -1,4 +1,5 @@
 ---
+title: YOLO26 Sliced Inference with SAHI
 comments: true
 description: Learn how to implement YOLO26 with SAHI for sliced inference. Optimize memory usage and enhance detection accuracy for large-scale applications.
 keywords: YOLO26, SAHI, Sliced Inference, Object Detection, Ultralytics, High-resolution Images, Computational Efficiency, Integration Guide
@@ -11,7 +12,7 @@ keywords: YOLO26, SAHI, Sliced Inference, Object Detection, Ultralytics, High-re
 Welcome to the Ultralytics documentation on how to use YOLO26 with [SAHI](https://github.com/obss/sahi) (Slicing Aided Hyper Inference). This comprehensive guide aims to furnish you with all the essential knowledge you'll need to implement SAHI alongside YOLO26. We'll deep-dive into what SAHI is, why sliced inference is critical for large-scale applications, and how to integrate these functionalities with YOLO26 for enhanced [object detection](https://www.ultralytics.com/glossary/object-detection) performance.
 
 <p align="center">
-  <img width="1024" src="https://cdn.jsdelivr.net/gh/ultralytics/assets@main/docs/sahi-sliced-inference-overview.avif" alt="SAHI tiled inference for small objects">
+  <video width="1024" src="https://cdn.ul.run/v/875e435c815f7be5e42d0d1af5627644.mp4" autoplay loop muted playsinline aria-label="SAHI tiled inference for small objects"></video>
 </p>
 
 ## Introduction to SAHI
@@ -20,13 +21,13 @@ SAHI (Slicing Aided Hyper Inference) is an innovative library designed to optimi
 
 <p align="center">
   <br>
-  <iframe loading="lazy" width="720" height="405" src="https://www.youtube.com/embed/ILqMBah5ZvI"
+  <iframe loading="lazy" width="720" height="405" src="https://www.youtube.com/embed/Kpl6cOUKbb8"
     title="YouTube video player" frameborder="0"
     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
     allowfullscreen>
   </iframe>
   <br>
-  <strong>Watch:</strong> Inference with SAHI (Slicing Aided Hyper Inference) using Ultralytics YOLO26
+  <strong>Watch:</strong> How to use SAHI with Ultralytics YOLO26 to Detect Small Objects | Slicing Aided Hyper Inference 🚀
 </p>
 
 ### Key Features of SAHI
@@ -53,8 +54,8 @@ Sliced Inference refers to the practice of subdividing a large or high-resolutio
     <th>YOLO26 with SAHI</th>
   </tr>
   <tr>
-    <td><img src="https://cdn.jsdelivr.net/gh/ultralytics/assets@main/docs/yolov8-without-sahi.avif" alt="YOLO26 without SAHI" width="640"></td>
-    <td><img src="https://cdn.jsdelivr.net/gh/ultralytics/assets@main/docs/yolov8-with-sahi.avif" alt="YOLO26 with SAHI" width="640"></td>
+    <td><img src="https://cdn.ul.run/i/1865c0db3cd5e950fa75d07c6f5f38bb.avif" alt="YOLO26 without SAHI" width="640"></td>
+    <td><img src="https://cdn.ul.run/i/9f337a31d7085922645a191325a4a419.avif" alt="YOLO26 with SAHI" width="640"></td>
   </tr>
 </table>
 
@@ -164,12 +165,14 @@ SAHI provides a `PredictionResult` object, which can be converted into various a
 # Access the object prediction list
 object_prediction_list = result.object_prediction_list
 
-# Convert to COCO annotation, COCO prediction, imantics, and fiftyone formats
+# Convert to COCO annotation and COCO prediction formats
 result.to_coco_annotations()[:3]
 result.to_coco_predictions(image_id=1)[:3]
-result.to_imantics_annotations()[:3]
-result.to_fiftyone_detections()[:3]
 ```
+
+!!! tip "Additional export formats"
+
+    `PredictionResult` can also convert detections to [imantics](https://github.com/jsbroks/imantics) and [FiftyOne](https://github.com/voxel51/fiftyone) objects with `result.to_imantics_annotations()` and `result.to_fiftyone_detections()`. These methods require the respective packages, so install them first with `pip install imantics fiftyone`.
 
 ## Batch Prediction
 
