@@ -1,0 +1,3 @@
+# Preserve CAD exports byte-for-byte and keep geometry out of text diffs.
+*.STEP binary
+*.step binary

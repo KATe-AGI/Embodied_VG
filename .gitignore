@@ -20,6 +20,12 @@ Thumbs.db
 .vscode/
 
 # Datasets and collected sensor data
+camera_data/
+插拔装置模型/
+*.STEP
+*.step
+*.STP
+*.stp
 plug_dataset_all_20260520/
 plug_dataset_all_20260529/
 plug_reannotation_20260716/
@@ -31,11 +37,7 @@ v01_成功1_yolo/
 检测标注（已标注）_yolo/
 extra/
 test_*/
-hand_eye_calibration/eye_hand_data/**/*
-!hand_eye_calibration/eye_hand_data/
-!hand_eye_calibration/eye_hand_data/calib_20260522/
-!hand_eye_calibration/eye_hand_data/calib_20260522/hand_eye_result_in-hand.yaml
-!hand_eye_calibration/eye_hand_data/calib_20260522/hand_eye_result_in-hand.json
+hand_eye_calibration/eye_hand_data/
 
 # Original README illustration/reference images from the upstream hand-eye repo
 hand_eye_calibration/picture/

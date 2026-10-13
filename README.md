@@ -46,6 +46,7 @@ T_base_grasp = T_base_end_current @ T_end_camera @ T_camera_grasp
 infer_6d_single.py                 单帧 6D 抓取主入口
 infer_6d_batch.py                  批量 6D 抓取入口
 infer_gripper_plug_single.py       图像/视频/实时流夹爪抓取状态检测
+infer_apriltag_cylinder.py         RGB AprilTag 中心与朝向相机的法向量，自动转换基座系
 infer.py                           YOLO 分割调试入口
 train.py                          YOLO 分割/检测训练
 val.py                            分割验证
@@ -206,6 +207,87 @@ python infer_gripper_plug_single.py \
 实时模式会定期在终端刷新当前帧的状态、类别和置信度，并在退出后保存汇总 JSON。需要限制测试时长可使用 `--max-frames N`；指定 `--save-overlay` 会把实时结果保存为 `live_gripper_plug.mp4`。
 
 网络摄像头可使用 `--stream 'rtsp://camera-ip/stream'`。实时 JSON 保存为 `live_gripper_plug.json`，包含类别统计和最后一帧的结果；离线 JSON 保存全部已处理帧的结果。模型在每次运行中只加载一次，首次预测包含初始化/预热开销，终端的 YOLO 耗时包含预测调用的预处理与后处理。
+
+## AprilTag 参考点、预设点与有向法向量
+
+采集图像、手眼标定结果、STEP 模型、模型权重及推理输出仅保存在本地，不随代码提交。新环境需自行准备对应文件，或通过脚本参数指定本地路径；下方示例使用的图片及默认手眼标定路径不是仓库内附带的数据。
+
+`infer_apriltag_cylinder.py` 保留原入口文件名，现改为纯 RGB 的中心与法向量估计。检测 `tagStandard41h12 / ID 0` 后，将原始四角点及单应矩阵传入迁入的官方 AprilRobotics `estimate_tag_pose()`，得到 `R_camera_tag` 和 `t_camera_tag`。中心为 `P_camera=t`；法向量为归一化的 `R[:,2]`，当 `dot(n,-P)<0` 时翻转，始终指向相机光心所在半空间。输出使用标记几何中心，而不是四个边角之一。
+
+```bash
+conda activate embodiedvg
+pip install -r requirement.txt
+# 首次运行需 C 编译器；Ubuntu 未安装时运行 sudo apt install build-essential
+python infer_apriltag_cylinder.py \
+  --rgb camera_data/20261010_144623_467_color.png \
+  --tagsize 0.018 \
+  --robot-pose -0.014293 0.460711 0.742759 2.167158 0.044541 -3.126827 \
+  --output-dir output/apriltag_pose \
+  --show
+```
+
+相机内参和手眼标定默认读取已有配置，无需特意传参。上述机器人位姿用于示例流程；实际定位请替换为拍摄时的末端位姿（米、弧度）。当前机器人位姿实时接口尚未实现，所以基座系转换仍需 `--robot-pose`。计算自动完成：
+
+```text
+T_base_camera = T_base_end @ T_end_camera
+P_base = R_base_camera @ P_camera + t_base_camera
+n_base = R_base_camera @ n_camera
+```
+
+法向量是方向，只乘旋转、不加平移，并保持单位长度；它在基座系满足 `dot(n_base, camera_origin_base-P_base)>=0`。JSON 同时输出两种坐标系的中心与法向量，`center_normal_base` 明确提供最终六个数 `center_x/y/z`（米）及 `normal_x/y/z`（无量纲单位向量）。
+
+固定偏移在 [configs/placement/plug_placement.yaml](configs/placement/plug_placement.yaml) 统一管理，使用米。可用 `--placement-config` 指定其他配置。脚本同时输出 `placement_points_base_m`：
+
+```text
+reference   = P_base
+preset      = reference + (0.200 + 0.020) * n_base
+head_preset = preset + [0, 0,  0.080]
+tail_preset = preset + [0, 0, -0.087]
+```
+
+200 mm 是沿法向的轴线偏移，额外 20 mm 是轴线到侧表面的偏移；两者保留为独立配置项。头尾偏移沿固定基座 Z 轴，不沿标记局部坐标。`approach_direction_base=-n_base` 给出接近方向。JSON 中 `placement_offsets` 记录使用的数值；HTML/PNG 标注四个点、220/80/87 mm 偏移，RGB 叠加可见的虚拟预设点。预设点只表示几何目标，不输出机械臂运动或夹爪动作。
+
+`--tagsize` 可显式设置实际尺寸，默认 `0.018 m`（实测 18 mm），表示检测器四角所围成的蓝框：**5×5 白色定位环的外边界**。此尺寸直接传入官方 `estimate_tag_pose()`，无需乘 `5/9`。完整 9×9 编码图案的推导边长为 `0.018×9/5=0.0324 m`；灰色打印参考框不参与位姿尺寸定义。旧参数 `--tag-size` 已移除。纯 RGB 距离直接依赖实际打印尺寸，应按实物测量设置；测量蓝框不代表可以沿蓝框裁剪，完整图案及周围留白仍需保留。输入应为当前无畸变 RGB 或已校正图像，分辨率需与内参匹配。
+
+旧 D2RGB 定位、深度回退、基座 −Y 偏移和 CAD 圆柱包络已删除。检测依旧使用 `pupil-apriltags`，仅取 ID/四角/单应矩阵，不调用其位姿接口。官方位姿与数学依赖的源码子集放在 `third_party/apriltag_pose/`，没有克隆整个官方仓库，算法源码保持原样并保留许可证与固定提交号；首次运行编译共享库，之后复用缓存。来源及构建说明见 [third_party/apriltag_pose/README.md](third_party/apriltag_pose/README.md)。
+
+每张图像始终生成四个文件：
+
+- `*_apriltag_pose.json`：检测信息、官方位姿误差、相机系/基座系的中心与单位法向量、变换矩阵。
+- `*_overlay.jpg`：RGB 上的中心（绿色）、朝向相机的法向量箭头（橙色），两种坐标系的数值。
+- `*_base_view.html`：RGB 标注图与标记平面、参考/预设/头尾预设点、相机光心、有向法向量及基座 XYZ 的交互三维视图。图片和 Plotly 均嵌入 HTML，离线可打开，也可复制到其他电脑查看。
+- `*_base_view.png`：基座系三维静态预览。
+
+箭头长度仅用于可视化，输出法向量始终为单位向量；正对相机时箭头在 RGB 上可能投影为很短的线，三维视图仍可见其方向。`--show` 在桌面会话中尝试用浏览器打开包含 RGB 标注与三维视图的 HTML，不再调用 OpenCV/Qt 窗口。SSH 或无桌面 Linux 会话（没有 `DISPLAY`、`WAYLAND_DISPLAY`）仍正常完成计算与文件保存，并输出 HTML 路径；可在有浏览器的电脑上打开该文件。浏览器启动失败也不影响已计算的结果。未检测到目标 ID、存在多个同 ID 标记、位姿无效或分辨率不匹配时，保存 `status=failed` JSON 并以非零状态退出。
+
+## 单帧插头头尾侧表面端部点定位
+
+`infer_plug_endpoint_single.py` 独立处理夹持插头的照片，不读取 AprilTag 结果，也不计算运动修正量。默认使用 `ultralytics/runs/segment/plug_yolo26n_seg_20260904/weights/best.pt` 的 `plug_head` / `plug_tail` 类别，只定位当前可见端。输入接口与 AprilTag 脚本对齐，并增加对齐到 RGB 的原始深度：
+
+```bash
+python infer_plug_endpoint_single.py \
+  --rgb test_gt_20260902/20260902_133202_557_color.png \
+  --d2rgb test_gt_20260902/20260902_133202_557_d2rgb.npy \
+  --robot-pose -0.014293 0.460711 0.742759 2.167158 0.044541 -3.126827 \
+  --output-dir output/plug_endpoint \
+  --show
+```
+
+示例法兰位姿仅用于跑通流程，不能作为这些历史照片的真实拍摄位姿。RGB 与 D2RGB 必须是同一拍摄时刻、相同像素网格，默认 1920×1080。深度 PNG/NPY 保留传感器原始数值，由相机配置中的 `depth_scale` 转为米；不能传入深度彩色可视化。实际使用时将 `--robot-pose` 替换为曝光时刻的法兰位姿（米、固定轴 XYZ RPY 弧度），不是含工具偏移的 TCP 位姿。相机内参、手眼标定和偏移/定位配置均有默认值，分别可用 `--camera-config`、`--hand-eye-config`、`--placement-config` 覆盖。`--seg-weights`、`--conf`、`--imgsz`、`--device` 可调整分割推理设置。
+
+点位定义为**靠相机侧表面的头端或尾端边缘中点，允许向插头表面内部退让**，不是端面圆心、插头轴心或 TCP 中心。处理步骤：
+
+1. 保留原始分割类别和全分辨率掩膜；要求唯一目标实例，拒绝多实例歧义。
+2. 使用“尾到头近似基座 +Z”的先验，通过拍摄时相机姿态投影确定头尾方向。只在该方向的端部区域估计两侧中间位置，避免大圆环拉偏整个掩膜质心。明显细长且方向冲突的掩膜会被拒绝；短尾或宽圆环区域仅依赖 +Z 先验，JSON 中 `localization.axis_check` 明确记录。
+3. 将目标沿图像中的轴向向内退让，默认 3 px，最多 12 px；同时要求距原掩膜边界至少 3 px。`localization.edge_pixel`、`target_pixel`、`inset_actual_px` 记录边缘估计和实际退让。
+4. 采样仅来自目标附近圆形邻域与向内腐蚀掩膜的交集。默认半径 14 px、掩膜腐蚀 2 px；排除无效深度，并用 RANSAC 剔除不符合局部表面的深度。限制在掩膜内部降低背景污染，但分割错误或深度传感器边界混合仍需实物验证。
+5. 比较逆深度平面与二次曲面模型，用留出的空间采样点验证预测误差；曲面明显改善验证误差时才采用。目标必须处于有效内点的凸包中，避免在深度不足时外推。拟合深度后，沿目标像素射线反投影 XYZ，再通过法兰位姿和手眼变换得到基座 XYZ。
+
+输出 `*_plug_endpoint.json` 中的 `class_name`、`point_camera_m`、`point_base_m`、`localization`、`quality` 和变换矩阵。JSON 的 `status=ok / valid=true` 表示通过当前分割和数值拟合检查，**不表示已经实测达到 3 mm 精度或已验证端部语义点**；相应字段为 `physical_accuracy_verified=false`、`semantic_endpoint_verified=false`。局部拟合残差不包含分割边缘误差、退让偏差、手眼标定和法兰位姿误差。
+
+同时生成 `*_endpoint_overlay.jpg` 和可离线查看的 `*_endpoint_review.html`，显示全图、端部局部放大和基座系局部点云。青色为分割边界，绿色线为腐蚀边界，黄色标记为估计边缘中点，红色十字为实际退让后的目标，绿色点为深度内点，紫色点为剔除样本。`--show` 使用浏览器，无桌面时只打印路径。分割、端部定位或拟合失败时保存失败 JSON；已读入图像且完成分割推理的失败也保留可视化，退出码为 1。
+
+这一版只处理单帧，不进行实时跟踪、机械臂控制或松夹爪。3 mm 为待验证的物理误差目标。退让参数改变目标点的物理位置，验证其与头尾预设点的对应关系时应固定点位定义；不自动把退让后的点补偿回严格边缘。
 
 ## 检测数据集与训练
 

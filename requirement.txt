@@ -10,5 +10,7 @@ requests>=2.31
 psutil>=5.9
 tqdm>=4.66
 polars>=0.20
+pupil-apriltags>=1.0.4.post11
+plotly>=5.0
 ultralytics-thop>=2.0.18
 -e ./ultralytics
