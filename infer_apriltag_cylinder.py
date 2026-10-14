@@ -26,9 +26,9 @@ r'''
 conda activate embodiedvg
 
 python infer_apriltag_cylinder.py \
-  --rgb camera_data/20261010_144623_467_color.png \
+  --rgb camera_data/20261013_131742_642_color.png \
   --tagsize 0.018 \
-  --robot-pose -0.014293 0.460711 0.742759 2.167158 0.044541 -3.126827 \
+  --robot-pose -0.30118 -0.49979 0.24279 1.65792 -0.08564 -3.14141 \
   --output-dir output/apriltag_pose \
   --show
 '''
@@ -208,18 +208,20 @@ def save_3d_views(center: np.ndarray, normal: np.ndarray, corners: np.ndarray,
     plt.close(static)
 
 
-def show_visualization(path: Path) -> None:
+def show_visualization(path: Path, *, quiet: bool = False) -> None:
     """Open the offline visualization without initializing OpenCV's Qt backend."""
     path = path.resolve()
     if sys.platform.startswith("linux") and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
-        print(f"No graphical display; open the saved HTML in a desktop browser: {path}")
+        if not quiet:
+            print(f"No graphical display; open the saved HTML in a desktop browser: {path}")
         return
     try:
         opened = webbrowser.open(path.as_uri())
     except (webbrowser.Error, OSError) as exc:
-        print(f"Could not open browser ({exc}); open the saved HTML manually: {path}")
+        if not quiet:
+            print(f"Could not open browser ({exc}); open the saved HTML manually: {path}")
         return
-    if not opened:
+    if not opened and not quiet:
         print(f"No browser opened; open the saved HTML manually: {path}")
 
 
@@ -282,7 +284,7 @@ def run(args: argparse.Namespace) -> tuple[dict, Path]:
     save_3d_views(center_base, normal_base, corners_base, camera_origin_base, arrow_length, result)
     write_json(json_path, result)
     if args.show:
-        show_visualization(Path(result["artifacts"]["base_view_html"]))
+        show_visualization(Path(result["artifacts"]["base_view_html"]), quiet=True)
     return result, json_path
 
 
@@ -294,11 +296,6 @@ def main() -> int:
         write_json(args.output_dir / f"{args.rgb.stem}_apriltag_pose.json", {"status": "failed", "reason": str(exc)})
         print(f"failed: {exc}")
         return 1
-    print(f"Camera center XYZ (m): {result['tag_center_camera_m']}")
-    print(f"Camera unit normal: {result['tag_normal_camera']}")
-    print("Base center and camera-facing unit normal:")
-    for key, value in result["center_normal_base"].items():
-        print(f"{key} = {value:.8f}")
     for name, point in result["placement_points_base_m"].items():
         print(f"{name} base XYZ (m): {point}")
     print(f"JSON: {path}")
