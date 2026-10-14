@@ -3,8 +3,8 @@ position_unit: meter
 reference:
   axis_offset_m: 0.200
   surface_offset_m: 0.020
-  head_base_z_offset_m: 0.080
-  tail_base_z_offset_m: -0.087
+  head_base_z_offset_m: 0.082
+  tail_base_z_offset_m: -0.09
 endpoint:
   mask_erosion_px: 2
   target_inset_px: 3
