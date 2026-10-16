@@ -27,7 +27,7 @@ def load_placement(path: Path = DEFAULT_PLACEMENT) -> dict:
     for key, value in endpoint.items():
         if not isinstance(value, (int, float)) or not np.isfinite(value) or value <= 0:
             raise ValueError(f"Endpoint setting must be finite and positive: {key}")
-    for key in ("mask_erosion_px", "patch_radius_px", "min_valid_points"):
+    for key in ("mask_erosion_px", "target_inset_px", "max_target_retreat_px", "patch_radius_px", "min_valid_points"):
         if endpoint[key] != int(endpoint[key]):
             raise ValueError(f"Endpoint setting must be an integer: {key}")
     if not 0 < endpoint["min_inlier_ratio"] <= 1:
@@ -36,6 +36,8 @@ def load_placement(path: Path = DEFAULT_PLACEMENT) -> dict:
         raise ValueError("max_axis_angle_deg must be in (0,90)")
     if endpoint["min_depth_m"] >= endpoint["max_depth_m"]:
         raise ValueError("Invalid endpoint depth range")
+    if endpoint["max_target_retreat_px"] < endpoint["target_inset_px"]:
+        raise ValueError("Max retreat must cover the requested inset")
     if endpoint["min_valid_points"] < 12:
         raise ValueError("At least 12 depth samples are required")
     return data

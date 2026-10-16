@@ -15,7 +15,6 @@ from infer_apriltag_cylinder import DEFAULT_HAND_EYE, show_visualization
 from plug_vg.config import DEFAULT_CAMERA, ROOT, load_camera
 from plug_vg.io import read_depth_raw, write_json
 from plug_vg.placement import DEFAULT_PLACEMENT, load_placement
-from plug_vg.endpoint_review import save_process_summary
 from plug_vg.plug_endpoint import choose_end_instance, fit_local_depth, locate_edge_point, projected_base_axis
 from plug_vg.robot_transform import load_hand_eye_matrix, robot_pose_to_matrix, round_list
 
@@ -24,10 +23,10 @@ DEFAULT_WEIGHTS = ROOT / "ultralytics/runs/segment/plug_yolo26n_seg_20260904/wei
 r'''
 conda activate embodiedvg
 python infer_plug_endpoint_single.py \
-  --rgb test_gt_20260902/20260902_133538_506_color.png \
-  --d2rgb test_gt_20260902/20260902_133538_506_d2rgb.npy \
+  --rgb test_gt_20260902/20260902_133202_557_color.png \
+  --d2rgb test_gt_20260902/20260902_133202_557_d2rgb.npy \
   --robot-pose -0.014293 0.460711 0.742759 2.167158 0.044541 -3.126827 \
-  --output-dir output/plug_endpoint_1014 \
+  --output-dir output/plug_endpoint \
   --show
 '''
 
@@ -65,15 +64,16 @@ def draw_endpoint_overlay(image: np.ndarray, instance: dict | None, location: di
         edge = tuple(np.rint(location["edge_pixel"]).astype(int))
         target = tuple(location["target_pixel"].astype(int))
         cv2.circle(overlay, edge, 6, (0, 200, 255), 2)
+        cv2.arrowedLine(overlay, edge, target, (0, 200, 255), 2)
         cv2.drawMarker(overlay, target, (0, 0, 255), cv2.MARKER_CROSS, 20, 2)
-        cv2.putText(overlay, "Edge midpoint target", (target[0]+12, target[1]-10),
+        cv2.putText(overlay, "Inset surface target", (target[0]+12, target[1]-10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
     if fit is not None:
         for pixel, keep in zip(fit["sample_pixels"], fit["inlier_mask"]):
             cv2.circle(overlay, tuple(pixel.astype(int)), 1, (0, 255, 0) if keep else (255, 0, 255), -1)
         cv2.drawMarker(overlay, tuple(location["target_pixel"].astype(int)), (0, 0, 255), cv2.MARKER_CROSS, 20, 2)
     texts = [f"{result['status']} / {result.get('class_name', 'no class')} / side surface point, not axis center",
-             "Cyan: mask; green outline: eroded mask; yellow: edge; red: edge target",
+             "Cyan: mask; green outline: eroded mask; yellow: edge; red: inset target",
              "Green dots: fitted depth inliers; magenta dots: rejected samples"]
     if result["status"] == "ok":
         texts += [f"Camera XYZ (m): {result['point_camera_m']}", f"Base XYZ (m): {result['point_base_m']}",
@@ -102,7 +102,7 @@ def save_review(result: dict, fit: dict | None, t_base_camera: np.ndarray) -> No
                                           name=label, marker=dict(size=3, color=color)))
         point = np.asarray(result["point_base_m"])
         fig.add_trace(go.Scatter3d(x=[point[0]], y=[point[1]], z=[point[2]], mode="markers+text",
-                                  name="Edge midpoint", text=[result["class_name"]],
+                                  name="Inset side-surface point", text=[result["class_name"]],
                                   marker=dict(size=9, color="red")))
         # Keep depth outliers from making the local point invisible.
         bounds = np.vstack([samples[keep], point])
@@ -114,14 +114,8 @@ def save_review(result: dict, fit: dict | None, t_base_camera: np.ndarray) -> No
     fig.update_layout(title="Plug endpoint local depth review / " + result["status"],
                       margin=dict(l=0, r=0, b=0, t=55))
     rgb = base64.b64encode(Path(result["artifacts"]["rgb_overlay"]).read_bytes()).decode("ascii")
-    image_section = ('<h2>Segmentation, fixed edge target and interior depth support</h2>'
+    image_section = ('<h2>Segmentation, edge, inward target and depth support</h2>'
                      f'<img src="data:image/jpeg;base64,{rgb}" style="max-width:100%">')
-    summary = base64.b64encode(Path(result["artifacts"]["process_summary_png"]).read_bytes()).decode("ascii")
-    image_section = ('<h1>插头边缘中点定位：逐步处理汇总</h1>'
-                     '<p>目标点保持在原始分割边缘。仅将深度采样限制在腐蚀后的掩膜内；'
-                     '局部表面拟合后在原边缘像素处估计深度。边缘到有效内点的外推距离受配置限制。</p>'
-                     f'<a href="data:image/png;base64,{summary}" download="process_summary.png">下载汇总图</a>'
-                     f'<img src="data:image/png;base64,{summary}" style="width:100%;max-width:1800px">') + image_section
     if "localization" in result:
         image = cv2.imread(result["artifacts"]["rgb_overlay"])
         u, v = map(int, result["localization"]["target_pixel"])
@@ -168,7 +162,7 @@ def run(args: argparse.Namespace) -> tuple[dict, Path]:
     prefix = args.output_dir / args.rgb.stem
     path = Path(str(prefix) + "_plug_endpoint.json")
     result = {"status": "failed", "valid": False, "position_unit": "meter",
-              "point_definition": "camera-visible side-surface end-edge midpoint on original segmentation contour; no inward target shift",
+              "point_definition": "camera-visible side-surface end-edge midpoint, moved inward in image",
               "axis_prior": "tail to head approximately base +Z; fixed grasp orientation",
               "input": {"rgb": str(args.rgb), "d2rgb": str(args.d2rgb), "seg_weights": str(args.seg_weights),
                         "robot_pose_xyzrpy_m_rad": list(args.robot_pose), "pose_frame": "flange",
@@ -178,8 +172,7 @@ def run(args: argparse.Namespace) -> tuple[dict, Path]:
               "frame_transform": {"T_base_end": round_list(t_base_end), "T_end_camera": round_list(t_end_camera),
                                   "T_base_camera": round_list(t_base_camera)},
               "artifacts": {"rgb_overlay": str(prefix)+"_endpoint_overlay.jpg",
-                            "review_html": str(prefix)+"_endpoint_review.html",
-                            "process_summary_png": str(prefix)+"_process_summary.png"}}
+                            "review_html": str(prefix)+"_endpoint_review.html"}}
     instance = location = fit = None
     try:
         instance = choose_end_instance(prediction)
@@ -200,7 +193,6 @@ def run(args: argparse.Namespace) -> tuple[dict, Path]:
     overlay = draw_endpoint_overlay(image, instance, location, fit, result)
     if not cv2.imwrite(result["artifacts"]["rgb_overlay"], overlay):
         raise OSError("Could not save endpoint RGB overlay")
-    save_process_summary(image, depth, camera, instance, location, fit, result, t_base_camera)
     save_review(result, fit, t_base_camera)
     write_json(path, result)
     if args.show:

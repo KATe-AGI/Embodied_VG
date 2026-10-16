@@ -7,7 +7,8 @@ reference:
   tail_base_z_offset_m: -0.09
 endpoint:
   mask_erosion_px: 2
-  max_depth_extrapolation_px: 6  # Edge stays fixed; limit extrapolation from interior depth.
+  target_inset_px: 3
+  max_target_retreat_px: 12
   patch_radius_px: 14
   min_valid_points: 40
   min_depth_m: 0.10
