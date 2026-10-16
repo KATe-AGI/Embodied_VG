@@ -241,11 +241,13 @@ n_base = R_base_camera @ n_camera
 ```text
 reference   = P_base
 preset      = reference + (0.200 + 0.020) * n_base
-head_preset = preset + [0, 0,  0.080]
-tail_preset = preset + [0, 0, -0.087]
+head_preset = preset + [0, 0,  0.082]
+tail_preset = preset + [0, 0, -0.090]
 ```
 
-200 mm 是沿法向的轴线偏移，额外 20 mm 是轴线到侧表面的偏移；两者保留为独立配置项。头尾偏移沿固定基座 Z 轴，不沿标记局部坐标。`approach_direction_base=-n_base` 给出接近方向。JSON 中 `placement_offsets` 记录使用的数值；HTML/PNG 标注四个点、220/80/87 mm 偏移，RGB 叠加可见的虚拟预设点。预设点只表示几何目标，不输出机械臂运动或夹爪动作。
+200 mm 是沿法向的轴线偏移，额外 20 mm 是轴线到侧表面的偏移；两者保留为独立配置项。头尾偏移沿固定基座 Z 轴，不沿标记局部坐标。`approach_direction_base=-n_base` 给出接近方向。JSON 中 `placement_offsets` 记录使用的数值；HTML/PNG 标注四个点、220/82/90 mm 偏移，RGB 叠加可见的虚拟预设点。预设点只表示几何目标，不输出机械臂运动或夹爪动作。
+
+终端按中文注释分组打印四个基座点、基座系法线 `tag_normal_base`、凹槽切平面定位点的基座 Y 值和文件路径。凹槽定位点按 `reference + groove_plane_normal_offset_m * n_base` 计算；偏移参数在 `configs/placement/plug_placement.yaml` 的 `reference.groove_plane_normal_offset_m` 中设置，默认 `0.055 m`（5.5 cm）。JSON 的 `groove_tangent_plane_base` 保存定位点、法线、偏移和平面方程。切平面可能倾斜，打印的 Y 值仅对应定位点。
 
 `--tagsize` 可显式设置实际尺寸，默认 `0.018 m`（实测 18 mm），表示检测器四角所围成的蓝框：**5×5 白色定位环的外边界**。此尺寸直接传入官方 `estimate_tag_pose()`，无需乘 `5/9`。完整 9×9 编码图案的推导边长为 `0.018×9/5=0.0324 m`；灰色打印参考框不参与位姿尺寸定义。旧参数 `--tag-size` 已移除。纯 RGB 距离直接依赖实际打印尺寸，应按实物测量设置；测量蓝框不代表可以沿蓝框裁剪，完整图案及周围留白仍需保留。输入应为当前无畸变 RGB 或已校正图像，分辨率需与内参匹配。
 

@@ -25,9 +25,9 @@ class EndpointTests(unittest.TestCase):
         p = np.array([.1, .2, .3])
         points = preset_points(p, n, self.config)
         np.testing.assert_allclose(points['preset'], p+.22*n)
-        np.testing.assert_allclose(points['head_preset']-points['preset'], [0,0,.080])
-        np.testing.assert_allclose(points['tail_preset']-points['preset'], [0,0,-.087])
-        self.assertAlmostEqual(np.linalg.norm(points['head_preset']-points['tail_preset']), .167)
+        np.testing.assert_allclose(points['head_preset']-points['preset'], [0,0,.082])
+        np.testing.assert_allclose(points['tail_preset']-points['preset'], [0,0,-.090])
+        self.assertAlmostEqual(np.linalg.norm(points['head_preset']-points['tail_preset']), .172)
 
     def test_head_tail_direction_and_ring_does_not_move_midpoint(self):
         self.mask[90:110, 50:150] = 1

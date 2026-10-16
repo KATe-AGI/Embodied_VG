@@ -26,8 +26,7 @@ python infer_plug_endpoint_single.py \
   --rgb test_gt_20260902/20260902_133202_557_color.png \
   --d2rgb test_gt_20260902/20260902_133202_557_d2rgb.npy \
   --robot-pose -0.014293 0.460711 0.742759 2.167158 0.044541 -3.126827 \
-  --output-dir output/plug_endpoint \
-  --show
+  --output-dir output/plug_endpoint
 '''
 
 
@@ -208,13 +207,16 @@ def main() -> int:
     except (ValueError, OSError, KeyError, ImportError, RuntimeError) as exc:
         result = {"status": "failed", "valid": False, "reason": str(exc)}
         write_json(path, result)
+    print("# 定位状态：ok 表示通过当前定位检查；failed 表示定位失败")
     print(f"status: {result['status']}")
     if result["status"] != "ok":
         print(f"failed: {result['reason']}")
     else:
+        print("\n# 端部类别：plug_head 为头部，plug_tail 为尾部")
         print(f"class: {result['class_name']}")
-        print(f"Camera point XYZ (m): {result['point_camera_m']}")
+        print("\n# 定位点：机器人基坐标系下的 XYZ 坐标，单位为米")
         print(f"Base point XYZ (m): {result['point_base_m']}")
+    print("\n# 输出文件：定位数据、图像叠加结果和交互式复核视图")
     print(f"JSON: {path}")
     for name, artifact in result.get("artifacts", {}).items():
         print(f"{name}: {artifact}")

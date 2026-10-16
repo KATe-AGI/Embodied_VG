@@ -59,12 +59,39 @@ class AprilTagPoseTests(unittest.TestCase):
             placement = result["placement_points_base_m"]
             np.testing.assert_allclose(np.array(placement["preset"])-placement["reference"],
                                        .22*np.array(result["tag_normal_base"]), atol=1e-8)
-            np.testing.assert_allclose(np.array(placement["head_preset"])-placement["preset"], [0,0,.08], atol=1e-8)
-            np.testing.assert_allclose(np.array(placement["tail_preset"])-placement["preset"], [0,0,-.087], atol=1e-8)
+            np.testing.assert_allclose(np.array(placement["head_preset"])-placement["preset"], [0,0,.082], atol=1e-8)
+            np.testing.assert_allclose(np.array(placement["tail_preset"])-placement["preset"], [0,0,-.090], atol=1e-8)
             html = Path(result["artifacts"]["base_view_html"]).read_text()
             self.assertIn("data:image/jpeg;base64,", html)
             self.assertIn("Plotly.newPlot", html)
-            self.assertIn("No graphical display", process.stdout)
+            plane = result["groove_tangent_plane_base"]
+            np.testing.assert_allclose(
+                np.array(plane["point_base_m"]) - placement["reference"],
+                0.055 * np.array(result["tag_normal_base"]), atol=1e-8)
+            self.assertEqual(plane["point_y_base_m"], plane["point_base_m"][1])
+            self.assertIn(f"tag_normal_base: {result['tag_normal_base']}", process.stdout)
+            self.assertNotIn("tag_normal_camera:", process.stdout)
+            self.assertIn("# 定位点：", process.stdout)
+            self.assertIn("平移 5.5 厘米", process.stdout)
+            self.assertIn(f"groove tangent plane point base Y (m): {plane['point_y_base_m']}",
+                          process.stdout)
+
+            # A custom placement file must drive both the geometry and printed distance.
+            from plug_vg.placement import load_placement
+            custom = load_placement()
+            custom["reference"]["groove_plane_normal_offset_m"] = 0.075
+            placement_config = directory / "placement.yaml"
+            placement_config.write_text(json.dumps(custom))
+            command = [*process.args, "--placement-config", str(placement_config)]
+            changed = subprocess.run(command, cwd=root, env=env, capture_output=True,
+                                     text=True, timeout=20)
+            self.assertEqual(changed.returncode, 0, changed.stderr)
+            updated = json.loads((directory / "tag_apriltag_pose.json").read_text())
+            np.testing.assert_allclose(
+                np.array(updated["groove_tangent_plane_base"]["point_base_m"]) - placement["reference"],
+                0.075 * np.array(result["tag_normal_base"]), atol=1e-8)
+            self.assertEqual(updated["groove_tangent_plane_base"]["normal_offset_m"], 0.075)
+            self.assertIn("平移 7.5 厘米", changed.stdout)
 
     def test_official_estimator_metric_scale_and_size_override(self) -> None:
         tag = detect_tag(self.image)

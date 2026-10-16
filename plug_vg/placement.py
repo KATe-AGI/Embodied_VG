@@ -16,10 +16,11 @@ def load_placement(path: Path = DEFAULT_PLACEMENT) -> dict:
     if not isinstance(data, dict) or data.get("position_unit") != "meter":
         raise ValueError("Placement config position_unit must be meter")
     reference = data["reference"]
-    for key in ("axis_offset_m", "surface_offset_m", "head_base_z_offset_m", "tail_base_z_offset_m"):
+    for key in ("axis_offset_m", "surface_offset_m", "head_base_z_offset_m", "tail_base_z_offset_m",
+                "groove_plane_normal_offset_m"):
         if not np.isfinite(reference[key]):
             raise ValueError(f"Invalid placement offset: {key}")
-    if reference["axis_offset_m"] < 0 or reference["surface_offset_m"] < 0:
+    if any(reference[key] < 0 for key in ("axis_offset_m", "surface_offset_m", "groove_plane_normal_offset_m")):
         raise ValueError("Normal offsets must be nonnegative")
     if reference["head_base_z_offset_m"] <= 0 or reference["tail_base_z_offset_m"] >= 0:
         raise ValueError("Head offset must be +Z and tail offset must be -Z")
