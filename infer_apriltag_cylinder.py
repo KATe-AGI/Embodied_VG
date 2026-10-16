@@ -34,6 +34,7 @@ python infer_apriltag_cylinder.py \
 '''
 
 DEFAULT_HAND_EYE = ROOT / "hand_eye_calibration/eye_hand_data/calib_20260812_PARK/hand_eye_result_in-hand.yaml"
+GROOVE_PLANE_NORMAL_OFFSET_M = 0.055
 
 
 def parse_args() -> argparse.Namespace:
@@ -243,6 +244,7 @@ def run(args: argparse.Namespace) -> tuple[dict, Path]:
     center_base, normal_base = center_normal_to_base(center_camera, normal_camera, t_base_camera)
     placement_config = load_placement(args.placement_config)
     placement_points = preset_points(center_base, normal_base, placement_config)
+    groove_plane_point = placement_points["reference"] + GROOVE_PLANE_NORMAL_OFFSET_M * normal_base
     camera_origin_base = t_base_camera[:3, 3]
     pose_size = args.tagsize
     corners_camera = tag_object_corners(pose_size) @ rotation.T + center_camera
@@ -264,6 +266,13 @@ def run(args: argparse.Namespace) -> tuple[dict, Path]:
         "tag_center_camera_m": round_list(center_camera), "tag_normal_camera": round_list(normal_camera),
         "tag_center_base_m": round_list(center_base), "tag_normal_base": round_list(normal_base),
         "placement_points_base_m": {key: round_list(point) for key, point in placement_points.items()},
+        "groove_tangent_plane_base": {
+            "normal_offset_m": GROOVE_PLANE_NORMAL_OFFSET_M,
+            "point_base_m": round_list(groove_plane_point),
+            "point_y_base_m": round(float(groove_plane_point[1]), 8),
+            "normal_base": round_list(normal_base),
+            "equation": "normal_base dot (P_base_m - point_base_m) = 0",
+        },
         "placement_offsets": placement_config["reference"],
         "approach_direction_base": round_list(-normal_base),
         "center_normal_base": dict(zip(("center_x", "center_y", "center_z", "normal_x", "normal_y", "normal_z"),
@@ -296,8 +305,16 @@ def main() -> int:
         write_json(args.output_dir / f"{args.rgb.stem}_apriltag_pose.json", {"status": "failed", "reason": str(exc)})
         print(f"failed: {exc}")
         return 1
+    print("# 定位点：机器人基坐标系下的 XYZ 坐标，单位为米")
+    print("# reference：参考点；preset：预设点；head_preset：头部预设点；tail_preset：尾部预设点")
     for name, point in result["placement_points_base_m"].items():
         print(f"{name} base XYZ (m): {point}")
+    print("\n# 法线：机器人基坐标系下朝向相机一侧的单位向量，无单位")
+    print(f"tag_normal_base: {result['tag_normal_base']}")
+    print("\n# 凹槽切平面：参考点沿法线正方向平移 5.5 厘米后，定位点的基坐标系 Y 值，单位为米")
+    print("# 切平面存在倾斜，此 Y 值仅对应定位点")
+    print(f"groove tangent plane point base Y (m): {result['groove_tangent_plane_base']['point_y_base_m']}")
+    print("\n# 输出文件：位姿数据、图像叠加结果、交互式三维视图和静态三维视图")
     print(f"JSON: {path}")
     for name, artifact in result["artifacts"].items():
         print(f"{name}: {artifact}")

@@ -97,22 +97,28 @@ def locate_edge_point(mask: np.ndarray, base_z_image: np.ndarray, class_name: st
     if width < 6:
         raise ValueError("End edge too narrow")
     mid = (qlow + qhigh) / 2
-    center_strip = np.abs(lateral - mid) <= max(1.5, width * 0.08)
-    tip_axial = float(np.quantile(axial[center_strip], 0.99))
+    # Intersect the transverse midpoint line with the ORIGINAL outer contour.
+    # Quantiles of interior pixels stop short of the true segmentation boundary.
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    crossings = []
+    for contour in contours:
+        vertices = contour[:, 0, :].astype(float)
+        a, b = vertices, np.roll(vertices, -1, axis=0)
+        la, lb = a @ transverse, b @ transverse
+        crossing = ((la <= mid) & (lb > mid)) | ((lb <= mid) & (la > mid))
+        fraction = (mid - la[crossing]) / (lb[crossing] - la[crossing])
+        points = a[crossing] + fraction[:, None] * (b[crossing] - a[crossing])
+        crossings.extend(points @ direction)
+    if not crossings:
+        raise ValueError("No end contour intersection at transverse midpoint")
+    tip_axial = float(max(crossings))
     edge = direction * tip_axial + transverse * mid
     safe = erode_mask(mask, int(cfg["mask_erosion_px"]))
-    distance = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
-    target = None
-    for retreat in range(int(cfg["target_inset_px"]), int(cfg["max_target_retreat_px"]) + 1):
-        candidate = edge - retreat * direction
-        u, v = np.rint(candidate).astype(int)
-        if 0 <= v < mask.shape[0] and 0 <= u < mask.shape[1] and safe[v, u] and distance[v, u] >= cfg["target_inset_px"]:
-            target = np.array([u, v], float)
-            break
-    if target is None:
-        raise ValueError("Cannot find a supported interior target within maximum retreat")
-    return {"edge_pixel": edge, "target_pixel": target, "direction_image": direction,
-            "inset_actual_px": float(np.linalg.norm(target - edge)), "terminal_width_px": float(width),
+    return {"edge_pixel": edge, "target_pixel": edge.copy(), "direction_image": direction,
+            "inset_actual_px": 0.0, "terminal_width_px": float(width),
+            "terminal_axial_range": [float(high - max(4, length * 0.25)), float(high)],
+            "terminal_lateral_range": [float(qlow), float(qhigh)],
+            "midpoint_lateral": float(mid),
             "axis_check": "elongated_silhouette_checked" if elongated else "base_Z_prior_only_short_or_wide_mask",
             "safe_mask": safe}
 
@@ -164,9 +170,9 @@ def fit_local_depth(depth_raw: np.ndarray, location: dict, camera: dict, cfg: di
     depth = depth_raw.astype(float) * camera["depth_scale"]
     radius = int(cfg["patch_radius_px"])
     target = location["target_pixel"]
-    u, v = target.astype(int)
-    x0, x1 = max(0, u-radius), min(depth.shape[1], u+radius+1)
-    y0, y1 = max(0, v-radius), min(depth.shape[0], v+radius+1)
+    u, v = target
+    x0, x1 = max(0, int(np.floor(u-radius))), min(depth.shape[1], int(np.ceil(u+radius))+1)
+    y0, y1 = max(0, int(np.floor(v-radius))), min(depth.shape[0], int(np.ceil(v+radius))+1)
     yy, xx = np.mgrid[y0:y1, x0:x1]
     selected = ((xx-u)**2 + (yy-v)**2 <= radius**2) & (location["safe_mask"][y0:y1, x0:x1] > 0)
     z = depth[y0:y1, x0:x1]
@@ -206,8 +212,15 @@ def fit_local_depth(depth_raw: np.ndarray, location: dict, camera: dict, cfg: di
         raise ValueError("Local depth validation RMSE exceeds limit")
     beta, keep = _robust_model(xy, z, degree, cfg)
     hull = cv2.convexHull(pixels[keep].astype(np.float32))
-    if cv2.pointPolygonTest(hull, tuple(map(float, target)), False) < 0:
-        raise ValueError("Target lacks surrounding inlier depth; refusing extrapolation")
+    signed_distance = cv2.pointPolygonTest(hull, tuple(map(float, target)), True)
+    extrapolation = max(0.0, -signed_distance)
+    if extrapolation > cfg["max_depth_extrapolation_px"]:
+        raise ValueError("Edge depth extrapolation exceeds maximum supported distance")
+    direction = location["direction_image"]
+    transverse = np.array([-direction[1], direction[0]])
+    local_pixels = pixels[keep] - target
+    if np.ptp(local_pixels @ transverse) < 6 or np.ptp(local_pixels @ direction) < 4:
+        raise ValueError("Insufficient spatial depth support at edge")
     prediction = 1 / (_design(xy[keep], degree) @ beta)
     rmse = float(np.sqrt(np.mean((prediction-z[keep])**2)))
     if rmse > cfg["max_fit_rmse_m"]:
@@ -220,10 +233,15 @@ def fit_local_depth(depth_raw: np.ndarray, location: dict, camera: dict, cfg: di
     sample_points = np.column_stack([(pixels[:, 0]-camera["cx"])*z/camera["fx"],
                                     (pixels[:, 1]-camera["cy"])*z/camera["fy"], z])
     return {"point_camera_m": xyz, "sample_pixels": pixels, "inlier_mask": keep,
+            "sample_depth_m": z, "sample_predicted_depth_m": 1 / (_design(xy, degree) @ beta),
+            "inlier_hull": hull,
             "sample_points_camera_m": sample_points,
             "quality": {"model": "inverse_depth_plane" if degree == 1 else "inverse_depth_quadratic",
                         "valid_samples": int(len(z)), "inlier_samples": int(keep.sum()),
                         "inlier_ratio": float(keep.mean()), "fit_rmse_m": rmse,
-                        "validation_rmse_m": score, "target_inside_inlier_hull": True,
+                        "validation_rmse_m": score, "target_inside_inlier_hull": signed_distance >= 0,
+                        "depth_extrapolation_px": extrapolation,
+                        "max_depth_extrapolation_px": cfg["max_depth_extrapolation_px"],
+                        "candidate_validation_rmse_m": {str(d): s for d, s in candidates},
                         "patch_radius_px": radius, "coefficients": beta.tolist(),
                         "accuracy_goal_m": cfg["accuracy_goal_m"], "physical_accuracy_verified": False}}

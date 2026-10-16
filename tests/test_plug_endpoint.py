@@ -25,9 +25,10 @@ class EndpointTests(unittest.TestCase):
         p = np.array([.1, .2, .3])
         points = preset_points(p, n, self.config)
         np.testing.assert_allclose(points['preset'], p+.22*n)
-        np.testing.assert_allclose(points['head_preset']-points['preset'], [0,0,.080])
-        np.testing.assert_allclose(points['tail_preset']-points['preset'], [0,0,-.087])
-        self.assertAlmostEqual(np.linalg.norm(points['head_preset']-points['tail_preset']), .167)
+        np.testing.assert_allclose(points['head_preset']-points['preset'], [0,0,self.config['reference']['head_base_z_offset_m']])
+        np.testing.assert_allclose(points['tail_preset']-points['preset'], [0,0,self.config['reference']['tail_base_z_offset_m']])
+        self.assertAlmostEqual(np.linalg.norm(points['head_preset']-points['tail_preset']),
+                               self.config['reference']['head_base_z_offset_m']-self.config['reference']['tail_base_z_offset_m'])
 
     def test_head_tail_direction_and_ring_does_not_move_midpoint(self):
         self.mask[90:110, 50:150] = 1
@@ -38,8 +39,9 @@ class EndpointTests(unittest.TestCase):
         self.assertGreater(tail['target_pixel'][1], 155)
         for location in [head, tail]:
             u,v = location['target_pixel'].astype(int)
-            self.assertTrue(location['safe_mask'][v,u])
-            self.assertLessEqual(location['inset_actual_px'], self.cfg['max_target_retreat_px']+1)
+            self.assertFalse(location['safe_mask'][v,u])
+            self.assertEqual(location['inset_actual_px'], 0)
+            np.testing.assert_array_equal(location['edge_pixel'], location['target_pixel'])
 
     def test_slanted_plane_depth_boundary_background_and_holes(self):
         location = locate_edge_point(self.mask, [0,-1], 'plug_head', self.cfg)
@@ -55,7 +57,9 @@ class EndpointTests(unittest.TestCase):
         inside=np.argwhere(self.mask>0)
         for y,x in inside[rng.choice(len(inside),len(inside)//12,replace=False)]:depth[y,x]=1000
         fit=fit_local_depth(depth,location,self.camera,self.cfg)
-        expected=rays[v,u]*z[v,u]
+        u,v=location['target_pixel']
+        expected_z=.5/(np.array([(u-100)/800,(v-100)/800,1])@normal)
+        expected=np.array([(u-100)/800,(v-100)/800,1])*expected_z
         np.testing.assert_allclose(fit['point_camera_m'],expected,atol=1e-6)
         pixels=fit['sample_pixels'].astype(int)
         self.assertTrue(np.all(location['safe_mask'][pixels[:,1],pixels[:,0]]))
@@ -77,13 +81,27 @@ class EndpointTests(unittest.TestCase):
         self.assertEqual(fit['quality']['model'],'inverse_depth_quadratic')
         self.assertAlmostEqual(fit['point_camera_m'][2],.5,places=7)
 
+    def test_subpixel_edge_depth_uses_original_ray_with_bounded_extrapolation(self):
+        location=locate_edge_point(self.mask,[0,-1],'plug_head',self.cfg)
+        location['target_pixel'] = location['edge_pixel'] = np.array([100.25,30.])
+        yy,xx=np.indices(self.mask.shape)
+        normal=np.array([.2,-.15,1.])
+        rays=np.stack([(xx-100)/800,(yy-100)/800,np.ones_like(xx)],axis=-1)
+        depth=500/(rays@normal)
+        depth[self.mask==0]=1300
+        fit=fit_local_depth(depth,location,self.camera,self.cfg)
+        ray=np.array([.25/800,-70/800,1.])
+        np.testing.assert_allclose(fit['point_camera_m'],ray*.5/(ray@normal),atol=1e-8)
+        self.assertFalse(fit['quality']['target_inside_inlier_hull'])
+        self.assertLessEqual(fit['quality']['depth_extrapolation_px'],self.cfg['max_depth_extrapolation_px'])
+
     def test_missing_depth_and_one_sided_support_rejected(self):
         location=locate_edge_point(self.mask,[0,-1],'plug_head',self.cfg)
         with self.assertRaisesRegex(ValueError,'Insufficient'):
             fit_local_depth(np.zeros(self.mask.shape),location,self.camera,self.cfg)
         depth=np.full(self.mask.shape,500.)
         _,v=location['target_pixel'].astype(int)
-        depth[:v+1,:]=0
+        depth[:v+9,:]=0
         with self.assertRaisesRegex(ValueError,'extrapolation'):
             fit_local_depth(depth,location,self.camera,self.cfg)
 
@@ -148,6 +166,9 @@ class EndpointTests(unittest.TestCase):
                 page=Path(result['artifacts']['review_html']).read_text()
                 self.assertIn('data:image/jpeg;base64,',page)
                 self.assertIn('Plotly.newPlot',page)
+                self.assertIn('data:image/png;base64,',page)
+                self.assertTrue(Path(result['artifacts']['process_summary_png']).is_file())
+                self.assertEqual(result['localization']['inset_actual_px'],0)
                 if class_id==0:self.assertGreater(result['localization']['target_pixel'][1],155)
                 else:self.assertLess(result['localization']['target_pixel'][1],45)
 

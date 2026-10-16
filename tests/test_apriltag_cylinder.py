@@ -59,12 +59,37 @@ class AprilTagPoseTests(unittest.TestCase):
             placement = result["placement_points_base_m"]
             np.testing.assert_allclose(np.array(placement["preset"])-placement["reference"],
                                        .22*np.array(result["tag_normal_base"]), atol=1e-8)
-            np.testing.assert_allclose(np.array(placement["head_preset"])-placement["preset"], [0,0,.08], atol=1e-8)
-            np.testing.assert_allclose(np.array(placement["tail_preset"])-placement["preset"], [0,0,-.087], atol=1e-8)
+            offsets = result["placement_offsets"]
+            np.testing.assert_allclose(np.array(placement["head_preset"])-placement["preset"],
+                                       [0,0,offsets["head_base_z_offset_m"]], atol=1e-8)
+            np.testing.assert_allclose(np.array(placement["tail_preset"])-placement["preset"],
+                                       [0,0,offsets["tail_base_z_offset_m"]], atol=1e-8)
             html = Path(result["artifacts"]["base_view_html"]).read_text()
             self.assertIn("data:image/jpeg;base64,", html)
             self.assertIn("Plotly.newPlot", html)
-            self.assertIn("No graphical display", process.stdout)
+            for key in ("tag_normal_base",):
+                line = next((line for line in process.stdout.splitlines()
+                             if line.startswith(key + ":")), None)
+                self.assertIsNotNone(line, f"Missing CLI normal field: {key}")
+                np.testing.assert_allclose(json.loads(line.split(":", 1)[1]), result[key])
+            self.assertNotIn("tag_normal_camera:", process.stdout)
+            plane = result["groove_tangent_plane_base"]
+            np.testing.assert_allclose(
+                np.array(plane["point_base_m"]) - placement["reference"],
+                0.055 * np.array(result["tag_normal_base"]), atol=1e-8,
+            )
+            self.assertEqual(plane["normal_base"], result["tag_normal_base"])
+            self.assertEqual(plane["point_y_base_m"], plane["point_base_m"][1])
+            self.assertIn(f"groove tangent plane point base Y (m): {plane['point_y_base_m']}",
+                          process.stdout)
+            self.assertIn("# 定位点：", process.stdout)
+            self.assertEqual([line.split(":", 1)[0] for line in process.stdout.splitlines()
+                              if line.strip() and not line.startswith("#")],
+                             ["reference base XYZ (m)", "preset base XYZ (m)",
+                              "head_preset base XYZ (m)", "tail_preset base XYZ (m)",
+                              "tag_normal_base",
+                              "groove tangent plane point base Y (m)",
+                              "JSON", "rgb_overlay", "base_view_html", "base_view_png"])
 
     def test_official_estimator_metric_scale_and_size_override(self) -> None:
         tag = detect_tag(self.image)
