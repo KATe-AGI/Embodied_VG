@@ -291,6 +291,39 @@ python infer_plug_endpoint_single.py \
 
 这一版只处理单帧，不进行实时跟踪、机械臂控制或松夹爪。3 mm 为待验证的物理误差目标。退让参数改变目标点的物理位置，验证其与头尾预设点的对应关系时应固定点位定义；不自动把退让后的点补偿回严格边缘。
 
+## 单帧插头入槽检验
+
+`infer_groove_placement_single.py` 检验放置后的插头是否位于凹槽允许范围内。默认使用 `plug_yolo26n_seg_20261019/weights/best.pt` 分割，提取掩膜内深度点云并执行一次对称 CAD 配准。头上尾下先验只用于排除头朝下的配准候选；目标槽位不参与配准优化。
+
+先使用 `infer_apriltag_cylinder.py` 保存装置参考点和朝向相机的法向量，再执行：
+
+```bash
+conda activate embodiedvg
+python infer_groove_placement_single.py \
+  --rgb 插头放置判断/true/20261009_160515_923_color.png \
+  --d2rgb 插头放置判断/true/20261009_160515_923_d2rgb.npy \
+  --apriltag-json output/apriltag_pose/20261013_131742_642_color_apriltag_pose.json \
+  --output-dir output/groove_placement \
+  --device 0 \
+  --show
+```
+
+法兰位姿默认复用 AprilTag JSON 中的 `input.robot_pose_xyzrpy_m_rad`，符合当前同位姿检查流程。相机移动后必须通过 `--robot-pose x y z roll pitch yaw` 指定检查图像曝光时的法兰位姿；结果 JSON 记录实际位姿及其来源。装置在采集参考和检查图像之间须相对机器人基座保持固定。参考图片、数据、权重和标定均为本地资产，示例路径不是随仓库分发的测试夹具。
+
+目标轴线经过 `C = reference + groove_plane_normal_offset_m * normal`，默认沿法向偏移 **55 mm**。方向为基座 +Z 投影到法向正交平面后归一化；允许轴段从 `C + tail_base_z_offset_m * direction` 延伸到 `C + head_base_z_offset_m * direction`，当前为 **−90～+82 mm**。172 mm 范围相对 167.8 mm CAD 有意保留上下活动余量。此流程不使用 200 mm / 20 mm 进入装置前的预设偏移，也不改变原 AprilTag 预设点的固定基座 Z 定义。
+
+唯一放置判定容差在 `configs/placement/plug_placement.yaml` 的 `groove_check.tolerance_m` 中设置，默认 **0.005 m**。预测头尾端面中心到允许有限轴段的最大三维距离不超过容差时通过；同一容差也在轴段上下界之外提供圆头缓冲区。输出状态和退出码为：
+
+| 状态 | `is_seated` | 退出码 | 含义 |
+|---|---|---|---|
+| `seated` | `true` | 0 | 几何偏差不超过 5 mm |
+| `not_seated` | `false` | 1 | 几何偏差超过 5 mm |
+| `unknown` | `null` | 2 | 无目标、多目标歧义、深度不足、参考无效或配准失败 |
+
+输出 `*_groove_placement.json`、`*_groove_overlay.jpg`、`*_groove_review.html`，点云提取成功时还保存相机系可见点云 PLY。HTML 内嵌 RGB 和 Plotly，可离线查看基座系观测点、配准 CAD、蓝色允许轴段和橙色预测轴段。能读入 RGB 的失败也保存叠加图；输入尚不可用时 HTML 记录失败原因。
+
+不进行子集重复配准或额外稳定性检查。`seated` 仅表示本次估计满足几何判据，不代表已验证测量精度、实际接触或支撑力。六帧实测运行记录见 [入槽检验验证报告](docs/groove-placement-validation.md)：当前三个 `true` 样本均未通过，仍需核对参考与数据的几何对应，不能据此声称已验证放置识别可靠性。
+
 ## 检测数据集与训练
 
 检测标注使用 LabelMe 矩形，标签 `0` 为 `gripper_with_plug`、`1` 为 `gripper_without_plug`。将原始数据放到 `检测标注（已标注）` 的各子目录后执行：

@@ -1,5 +1,7 @@
 # All physical distances are meters; pixel settings refer to the original RGB.
 position_unit: meter
+groove_check:
+  tolerance_m: 0.005  # 预测头尾端面中心到允许轴段的最大距离。
 reference:
   groove_plane_normal_offset_m: 0.055  # 参考点沿朝向相机的法线正方向平移，单位为米。
   axis_offset_m: 0.200

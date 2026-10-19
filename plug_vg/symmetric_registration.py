@@ -64,7 +64,7 @@ def build_profile_grid(model_points: np.ndarray, resolution_m: float = 0.0005) -
     radial_max = float(np.max(axial_radial[:, 1]) + 0.01)
     width = int(np.ceil((axial_max - axial_min) / resolution_m)) + 1
     height = int(np.ceil((radial_max - radial_min) / resolution_m)) + 1
-    occupied = np.zeros((height, width), dtype=bool)
+    occupied: np.ndarray = np.zeros((height, width), dtype=bool)
     axial_index = np.clip(
         np.round((axial_radial[:, 0] - axial_min) / resolution_m).astype(np.int64),
         0,
@@ -90,7 +90,7 @@ def build_profile_grid(model_points: np.ndarray, resolution_m: float = 0.0005) -
 
 
 def _fibonacci_directions(count: int) -> np.ndarray:
-    index = np.arange(int(count), dtype=np.float64)
+    index: np.ndarray = np.arange(int(count), dtype=np.float64)
     golden_ratio = (1.0 + np.sqrt(5.0)) * 0.5
     z = 1.0 - 2.0 * (index + 0.5) / float(count)
     radius = np.sqrt(np.maximum(0.0, 1.0 - np.square(z)))
@@ -256,7 +256,7 @@ def _render_candidate_cost(
     y1 = min(image_height, max(context.target_y1 - 1, int(np.max(v))) + margin + 1)
     roi_width = x1 - x0
     roi_height = y1 - y0
-    rendered_depth = np.full((roi_height, roi_width), np.inf, dtype=np.float64)
+    rendered_depth: np.ndarray = np.full((roi_height, roi_width), np.inf, dtype=np.float64)
     np.minimum.at(rendered_depth, (v - y0, u - x0), z)
 
     target_roi = context.target_mask[y0:y1, x0:x1]
@@ -334,6 +334,7 @@ def register_symmetric_points(
     camera: dict[str, Any],
     device: Any = None,
     render_workers: int = 4,
+    axis_up_camera: np.ndarray | None = None,
 ) -> tuple[str, np.ndarray | None, dict[str, Any]]:
     """Estimate task-equivalent pose using profile proposals and visible CAD scoring."""
 
@@ -362,6 +363,18 @@ def register_symmetric_points(
     render_model_points = np.asarray(model_points, dtype=np.float64)
 
     profile_candidates = optimize_profile_candidates(model_points, visible_points, device=device)
+    if axis_up_camera is not None:
+        up = np.asarray(axis_up_camera, dtype=np.float64)
+        if up.shape != (3,) or not np.isfinite(up).all() or np.linalg.norm(up) < 1e-9:
+            raise ValueError("axis_up_camera must be a finite nonzero XYZ direction")
+        # Restrict head/tail identity only. No groove position or target tilt
+        # enters the observation-driven optimization or candidate score.
+        profile_candidates = [
+            candidate for candidate in profile_candidates
+            if float(np.dot(candidate["axis_camera"], up)) > 0.0
+        ]
+        if not profile_candidates:
+            return "failed", None, {"reason": "no_candidate_satisfies_head_up_prior"}
     # Preserve directional coverage: select the best axial initialization for
     # every uniform/PCA axis seed instead of allowing one wrong local mode to
     # occupy the entire render shortlist.
@@ -422,7 +435,7 @@ def register_symmetric_points(
         return "failed", None, {"reason": "symmetric_registration_no_finite_candidate"}
 
     best = ranked[0]
-    t_camera_grasp = np.eye(4, dtype=np.float64)
+    t_camera_grasp: np.ndarray = np.eye(4, dtype=np.float64)
     t_camera_grasp[:3, :3] = canonical_rotation_from_axis(best["axis_camera"])
     t_camera_grasp[:3, 3] = best["origin_camera_m"]
     second_cost = float(ranked[1]["geometry_cost"]) if len(ranked) > 1 else None

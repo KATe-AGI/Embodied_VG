@@ -21,6 +21,7 @@ Thumbs.db
 
 # Datasets and collected sensor data
 camera_data/
+插头放置判断/
 插拔装置模型/
 *.STEP
 *.step
