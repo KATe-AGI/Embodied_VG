@@ -1,7 +1,9 @@
 # All physical distances are meters; pixel settings refer to the original RGB.
 position_unit: meter
 groove_check:
-  tolerance_m: 0.005  # 预测头尾端面中心到允许轴段的最大距离。
+  top_radius_m: 0.005  # 圆台上端（头部方向）半径。
+  bottom_radius_m: 0.020  # 圆台下端（尾部方向）半径。
+  min_inside_fraction: 0.80  # 有限预测长轴至少 80% 的长度位于圆台内。
 reference:
   groove_plane_normal_offset_m: 0.055  # 参考点沿朝向相机的法线正方向平移，单位为米。
   axis_offset_m: 0.200

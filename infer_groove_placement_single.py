@@ -21,7 +21,11 @@ from plug_vg.grasp_model import (
     load_grasp_model,
     transform_points,
 )
-from plug_vg.groove_placement import evaluate_groove_placement, groove_axis_segment
+from plug_vg.groove_placement import (
+    evaluate_groove_placement,
+    groove_axis_segment,
+    validate_groove_check,
+)
 from plug_vg.io import read_depth_raw, read_json, write_json
 from plug_vg.placement import DEFAULT_PLACEMENT, load_placement
 from plug_vg.robot_transform import (
@@ -41,6 +45,20 @@ DEFAULT_WEIGHTS = (
 LABELS = {"seated": "正确入槽", "not_seated": "未正确入槽", "unknown": "无法判断"}
 
 
+r"""
+conda activate embodiedvg
+
+python infer_groove_placement_single.py \
+  --rgb test_data/插头放置判断数据/true/20261023_154709_074_color.png \
+  --d2rgb test_data/插头放置判断数据/true/20261023_154709_074_d2rgb.npy \
+  --apriltag-json output/apriltag_pose/20261023_163823_957_color_apriltag_pose.json \
+  --robot-pose -0.338532 -0.045871 0.243139 1.551650 -0.030055 -3.123110 \
+  --output-dir output/groove_placement \
+  --show
+
+"""
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rgb", type=Path, required=True)
@@ -57,7 +75,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--robot-pose",
         nargs=6,
         type=float,
-        help="Capture flange XYZ/RPY (m/rad); defaults to the pose recorded in AprilTag JSON.",
+        required=True,
+        metavar=("X", "Y", "Z", "ROLL", "PITCH", "YAW"),
+        help="Capture flange XYZ/RPY (m/rad); must be provided for this image.",
     )
     parser.add_argument("--seg-weights", type=Path, default=DEFAULT_WEIGHTS)
     parser.add_argument("--model-config", type=Path, default=DEFAULT_GRASP_MODEL_CONFIG)
@@ -114,6 +134,39 @@ def save_review(
                 )
             )
     segments = []
+    if "allowed_frustum" in result:
+        envelope = result["allowed_frustum"]
+        centers = np.array([envelope["bottom_center_base_m"], envelope["top_center_base_m"]])
+        direction = centers[1] - centers[0]
+        direction /= np.linalg.norm(direction)
+        helper = np.eye(3)[int(np.argmin(np.abs(direction)))]
+        side = np.cross(direction, helper)
+        side /= np.linalg.norm(side)
+        second = np.cross(direction, side)
+        theta = np.linspace(0, 2 * np.pi, 65)
+        circle = np.cos(theta)[:, None] * side + np.sin(theta)[:, None] * second
+        rings = np.array([
+            centers[0] + envelope["bottom_radius_m"] * circle,
+            centers[1] + envelope["top_radius_m"] * circle,
+        ])
+        # Close the two disks as well as the side surface.
+        vertices = np.vstack([rings.reshape(-1, 3), centers])
+        faces = []
+        count = len(theta)
+        for i in range(count - 1):
+            faces.extend([(i, i + 1, count + i), (i + 1, count + i + 1, count + i),
+                          (2 * count, i + 1, i), (2 * count + 1, count + i, count + i + 1)])
+        faces = np.asarray(faces)
+        figure.add_trace(go.Mesh3d(
+            x=vertices[:, 0], y=vertices[:, 1], z=vertices[:, 2],
+            i=faces[:, 0], j=faces[:, 1], k=faces[:, 2],
+            color="royalblue", opacity=0.16, name="Allowed frustum", showlegend=True,
+        ))
+        # A wireframe projects the actual allowance onto the RGB review too.
+        for index, ring in enumerate(rings):
+            segments.append((ring, "Top rim" if index else "Bottom rim", "royalblue", (255, 100, 0)))
+        for index in range(0, count - 1, 16):
+            segments.append((rings[:, index], "Frustum side", "royalblue", (255, 100, 0)))
     if "allowed_axis_segment" in result:
         segment = result["allowed_axis_segment"]
         segments.append(
@@ -134,6 +187,16 @@ def save_review(
                 (0, 140, 255),
             )
         )
+        if "placement_check" in result:
+            endpoints = np.array([axis["tail_center_base_m"], axis["head_center_base_m"]])
+            intervals = result["placement_check"]["inside_intervals_t"]
+            breaks = sorted(set([0.0, 1.0, *[t for interval in intervals for t in interval]]))
+            for start, end in zip(breaks, breaks[1:]):
+                inside = any(a <= (start + end) / 2 <= b for a, b in intervals)
+                line = endpoints[0] + np.array([start, end])[:, None] * (endpoints[1] - endpoints[0])
+                segments.append((line, "Axis inside" if inside else "Axis outside",
+                                 "limegreen" if inside else "crimson",
+                                 (0, 210, 0) if inside else (0, 0, 220)))
     for line, name, color, bgr in segments:
         figure.add_trace(
             go.Scatter3d(
@@ -150,16 +213,16 @@ def save_review(
             pixels = [project_point_float(point, camera) for point in line_camera]
             if all(pixel is not None for pixel in pixels):
                 uv = np.clip(np.rint(np.asarray(pixels)), -1e6, 1e6).astype(int)
-                visible, start, end = cv2.clipLine(
-                    (0, 0, overlay.shape[1], overlay.shape[0]),
-                    tuple(uv[0]),
-                    tuple(uv[1]),
-                )
-                if visible:
-                    cv2.line(overlay, start, end, bgr, 3, cv2.LINE_AA)
+                for a, b in zip(uv, uv[1:]):
+                    visible, start, end = cv2.clipLine(
+                        (0, 0, overlay.shape[1], overlay.shape[0]), tuple(a), tuple(b)
+                    )
+                    if visible:
+                        cv2.line(overlay, start, end, bgr, 2, cv2.LINE_AA)
     title = result["status"]
     if "placement_check" in result:
-        title += f" | max distance {result['placement_check']['max_distance_mm']:.2f} mm / {result['placement_check']['tolerance_mm']:g} mm"
+        check = result["placement_check"]
+        title += f" | axis inside {check['inside_fraction']:.2%} / required {check['min_inside_fraction']:.0%}"
     image_html = ""
     if overlay is not None:
         cv2.putText(
@@ -181,7 +244,7 @@ def save_review(
         encoded = base64.b64encode(overlay_path.read_bytes()).decode("ascii")
         image_html = f'<img style="width:100%;max-width:1280px" src="data:image/jpeg;base64,{encoded}">'
     figure.update_layout(
-        title="Base frame (meters): blue=allowed, orange=predicted",
+        title="Base frame (meters): blue=allowed frustum, green=axis inside, red=axis outside",
         scene={
             "aspectmode": "data",
             "xaxis_title": "Base X (m)",
@@ -242,9 +305,7 @@ def run(args: argparse.Namespace) -> tuple[dict, Path]:
         ):
             raise ValueError("Invalid camera intrinsics or depth scale")
         cfg = load_placement(args.placement_config)
-        tolerance = float(cfg["groove_check"]["tolerance_m"])
-        if not np.isfinite(tolerance) or tolerance <= 0:
-            raise ValueError("Groove tolerance must be finite and positive")
+        check_config = validate_groove_check(cfg["groove_check"])
         reference = read_json(args.apriltag_json)
         if (
             not isinstance(reference, dict)
@@ -258,17 +319,18 @@ def run(args: argparse.Namespace) -> tuple[dict, Path]:
             reference["tag_center_base_m"], reference["tag_normal_base"], cfg
         )
         result["allowed_axis_segment"] = segment
+        result["allowed_frustum"] = {
+            **check_config,
+            "bottom_center_base_m": segment["tail_limit_base_m"],
+            "top_center_base_m": segment["head_limit_base_m"],
+        }
         result["reference_base"] = {
             "point_m": reference["tag_center_base_m"],
             "normal": reference["tag_normal_base"],
             "offsets": cfg["reference"],
-            "tolerance_m": tolerance,
+            "groove_check": check_config,
         }
-        pose = (
-            args.robot_pose
-            if args.robot_pose is not None
-            else reference["input"]["robot_pose_xyzrpy_m_rad"]
-        )
+        pose = args.robot_pose
         if not np.isfinite(pose).all():
             raise ValueError("Capture flange pose must be finite")
         t_base_end = robot_pose_to_matrix(pose)
@@ -286,9 +348,7 @@ def run(args: argparse.Namespace) -> tuple[dict, Path]:
         result["input"].update(
             robot_pose_xyzrpy_m_rad=list(pose),
             pose_frame="flange",
-            pose_source="command_line"
-            if args.robot_pose is not None
-            else "apriltag_json",
+            pose_source="command_line",
         )
         result["frame_transform"] = {
             "T_base_end": round_list(t_base_end),
@@ -392,7 +452,7 @@ def run(args: argparse.Namespace) -> tuple[dict, Path]:
             ).tolist(),
         }
         cad_base = transform_points(grasp_model.points_grasp_m, t_base_grasp)
-        check = evaluate_groove_placement(ends[0], ends[1], segment, tolerance)
+        check = evaluate_groove_placement(ends[0], ends[1], segment, check_config)
         result.update(
             status="seated" if check["is_seated"] else "not_seated",
             is_seated=check["is_seated"],
@@ -424,9 +484,10 @@ def main() -> int:
     if "placement_check" in result:
         check = result["placement_check"]
         print(
-            f"Head / tail / max distance (mm): {check['head_distance_mm']:.3f} / {check['tail_distance_mm']:.3f} / {check['max_distance_mm']:.3f}"
+            f"Diagnostic head / tail / max axis distance (mm): {check['head_distance_mm']:.3f} / {check['tail_distance_mm']:.3f} / {check['max_distance_mm']:.3f}"
         )
-        print(f"Tolerance (mm): {check['tolerance_mm']:g}")
+        print(f"Axis inside frustum: {check['inside_fraction']:.2%}; required: {check['min_inside_fraction']:.0%}")
+        print(f"Frustum top / bottom radius (mm): {check['top_radius_mm']:g} / {check['bottom_radius_mm']:g}")
     else:
         print(f"reason: {result.get('reason')}")
     print(f"JSON: {path}")

@@ -26,9 +26,9 @@ r'''
 conda activate embodiedvg
 
 python infer_apriltag_cylinder.py \
-  --rgb camera_data/20261013_131742_642_color.png \
+  --rgb test_data/test_261023/20261023_163823_957_color.png \
   --tagsize 0.018 \
-  --robot-pose -0.30118 -0.49979 0.24279 1.65792 -0.08564 -3.14141 \
+  --robot-pose -0.338533 -0.045871 0.243141 1.551650 -0.030072 -3.123110 \
   --output-dir output/apriltag_pose \
   --show
 '''

@@ -303,26 +303,27 @@ python infer_groove_placement_single.py \
   --rgb 插头放置判断/true/20261009_160515_923_color.png \
   --d2rgb 插头放置判断/true/20261009_160515_923_d2rgb.npy \
   --apriltag-json output/apriltag_pose/20261013_131742_642_color_apriltag_pose.json \
+  --robot-pose -0.30118 -0.49979 0.24279 1.65792 -0.08564 -3.14141 \
   --output-dir output/groove_placement \
   --device 0 \
   --show
 ```
 
-法兰位姿默认复用 AprilTag JSON 中的 `input.robot_pose_xyzrpy_m_rad`，符合当前同位姿检查流程。相机移动后必须通过 `--robot-pose x y z roll pitch yaw` 指定检查图像曝光时的法兰位姿；结果 JSON 记录实际位姿及其来源。装置在采集参考和检查图像之间须相对机器人基座保持固定。参考图片、数据、权重和标定均为本地资产，示例路径不是随仓库分发的测试夹具。
+检查脚本要求显式传入检查图像曝光时的法兰位姿 `--robot-pose x y z roll pitch yaw`；示例使用与 AprilTag 脚本相同的位姿，但实际运行时应替换为检查帧的真实位姿。结果 JSON 记录实际位姿及其来源。装置在采集参考和检查图像之间须相对机器人基座保持固定。参考图片、数据、权重和标定均为本地资产，示例路径不是随仓库分发的测试夹具。
 
 目标轴线经过 `C = reference + groove_plane_normal_offset_m * normal`，默认沿法向偏移 **55 mm**。方向为基座 +Z 投影到法向正交平面后归一化；允许轴段从 `C + tail_base_z_offset_m * direction` 延伸到 `C + head_base_z_offset_m * direction`，当前为 **−90～+82 mm**。172 mm 范围相对 167.8 mm CAD 有意保留上下活动余量。此流程不使用 200 mm / 20 mm 进入装置前的预设偏移，也不改变原 AprilTag 预设点的固定基座 Z 定义。
 
-唯一放置判定容差在 `configs/placement/plug_placement.yaml` 的 `groove_check.tolerance_m` 中设置，默认 **0.005 m**。预测头尾端面中心到允许有限轴段的最大三维距离不超过容差时通过；同一容差也在轴段上下界之外提供圆头缓冲区。输出状态和退出码为：
+允许轴段作为上窄下宽的**圆形截面圆台**的中轴线，两端面位于上述上下界。`configs/placement/plug_placement.yaml` 中的 `groove_check.top_radius_m=0.005`、`bottom_radius_m=0.020` 分别设置头部方向的上端半径 **5 mm** 和尾部方向的下端半径 **20 mm**；半径沿高度线性变化，所有横向方向均适用。判据为有限预测长轴在圆台内的长度占完整预测长轴长度的比例，`min_inside_fraction=0.80` 表示**至少 80% 在内才通过**；上下端面外的长度也计为在外，圆台边界计为在内。采用解析线段交点计算长度，不依赖采样密度。旧的头尾点到允许轴段的距离仅保留作诊断，不参与判定。输出状态和退出码为：
 
 | 状态 | `is_seated` | 退出码 | 含义 |
 |---|---|---|---|
-| `seated` | `true` | 0 | 几何偏差不超过 5 mm |
-| `not_seated` | `false` | 1 | 几何偏差超过 5 mm |
+| `seated` | `true` | 0 | 预测长轴至少 80% 的长度位于圆台内 |
+| `not_seated` | `false` | 1 | 预测长轴在圆台内的长度比例小于 80% |
 | `unknown` | `null` | 2 | 无目标、多目标歧义、深度不足、参考无效或配准失败 |
 
-输出 `*_groove_placement.json`、`*_groove_overlay.jpg`、`*_groove_review.html`，点云提取成功时还保存相机系可见点云 PLY。HTML 内嵌 RGB 和 Plotly，可离线查看基座系观测点、配准 CAD、蓝色允许轴段和橙色预测轴段。能读入 RGB 的失败也保存叠加图；输入尚不可用时 HTML 记录失败原因。
+输出 `*_groove_placement.json`、`*_groove_overlay.jpg`、`*_groove_review.html`，点云提取成功时还保存相机系可见点云 PLY。JSON 的 `allowed_frustum` 保存上下端面中心、半径和比例阈值；`placement_check` 保存 `inside_fraction`、`outside_fraction`、轴长、在内长度和轴线参数区间。HTML 内嵌 RGB 和 Plotly，可离线查看基座系观测点、配准 CAD、蓝色半透明允许圆台及轴线在内（绿色）和在外（红色）的部分。RGB 同时投影圆台线框。能读入 RGB 的失败也保存叠加图；输入尚不可用时 HTML 记录失败原因。
 
-不进行子集重复配准或额外稳定性检查。`seated` 仅表示本次估计满足几何判据，不代表已验证测量精度、实际接触或支撑力。六帧实测运行记录见 [入槽检验验证报告](docs/groove-placement-validation.md)：当前三个 `true` 样本均未通过，仍需核对参考与数据的几何对应，不能据此声称已验证放置识别可靠性。
+不进行子集重复配准或额外稳定性检查。`seated` 仅表示本次估计满足几何判据，不代表已验证测量精度、实际接触或支撑力。当前圆台判据的四帧验证见 [圆台入槽检验验证报告](docs/groove-frustum-validation.md)，两正两负均符合标签；这四帧用于设计与调试，不构成独立泛化验证。[旧版六帧验证报告](docs/groove-placement-validation.md)记录的是此前 5 mm 最大端点距离判据及旧参考，保留作历史记录。
 
 ## 检测数据集与训练
 
