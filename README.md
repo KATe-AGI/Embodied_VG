@@ -115,7 +115,7 @@ python -m unittest discover -s tests
 | 用途 | 默认文件 |
 |---|---|
 | 抓取 YOLO 分割权重 | `ultralytics/runs/segment/plug_yolo26n_seg_20260814/weights/best.pt` |
-| 夹爪状态 YOLO 检测权重 | `ultralytics/runs/detect/plug_yolo26n_det_20261009/weights/best.pt` |
+| 夹爪状态 YOLO 检测权重 | `ultralytics/runs/detect/plug_yolo26n_det_20261030/weights/best.pt` |
 | 插头模型 | `configs/plug_models/plugCAD.yaml` |
 | 相机内参 | `configs/camera/plug_rgbd.yaml` |
 | 手眼标定 | `hand_eye_calibration/eye_hand_data/calib_20260812_PARK/hand_eye_result_in-hand.yaml` |
@@ -181,7 +181,7 @@ python infer_gripper_plug_single.py \
   --device 0
 ```
 
-类别 `0` 输出 `gripper_with_plug`，类别 `1` 输出 `gripper_without_plug`；未检测到夹爪时输出 `no_detection`。终端打印英文状态、类别、置信度、输出目录和模型加载/YOLO/端到端耗时；单图结果 JSON 保存到 `<output-dir>/<图像名>_gripper_plug.json`。指定 `--save-visualization`（或 `--save-overlay`）时，单图额外保存 JPG，视频额外保存带检测结果的 MP4。默认输出目录为 `ultralytics/runs/gripper_plug_single`，默认权重为 `ultralytics/runs/detect/plug_yolo26n_det_20261009/weights/best.pt`；可通过 `--weights` 和 `--conf` 覆盖。
+类别 `0` 输出 `no_plug`，类别 `1` 输出 `stable_grasp`，类别 `2` 输出 `unstable_grasp`；未检测到夹爪时输出 `no_detection`。终端打印英文状态、类别、置信度、输出目录和模型加载/YOLO/端到端耗时；单图结果 JSON 保存到 `<output-dir>/<图像名>_gripper_plug.json`。指定 `--save-visualization`（或 `--save-overlay`）时，单图额外保存 JPG，视频额外保存带检测结果的 MP4。默认输出目录为 `ultralytics/runs/gripper_plug_single`，默认权重为 `ultralytics/runs/detect/plug_yolo26n_det_20261030/weights/best.pt`；可通过 `--weights` 和 `--conf` 覆盖。
 
 视频输入会复用同一个 YOLO 模型逐帧推理，结果 JSON 中包含每个已处理帧的状态、类别、置信度和时间戳。`--frame-stride 2` 可每隔一帧处理一次，减少推理量，同时保持可视化视频的原始帧率：
 
@@ -287,7 +287,7 @@ python infer_plug_endpoint_single.py \
 
 输出 `*_plug_endpoint.json` 中的 `class_name`、`point_camera_m`、`point_base_m`、`localization`、`quality` 和变换矩阵。JSON 的 `status=ok / valid=true` 表示通过当前分割和数值拟合检查，**不表示已经实测达到 3 mm 精度或已验证端部语义点**；相应字段为 `physical_accuracy_verified=false`、`semantic_endpoint_verified=false`。局部拟合残差不包含分割边缘误差、退让偏差、手眼标定和法兰位姿误差。
 
-同时生成 `*_endpoint_overlay.jpg` 和可离线查看的 `*_endpoint_review.html`，显示全图、端部局部放大和基座系局部点云。青色为分割边界，绿色线为腐蚀边界，黄色标记为估计边缘中点，红色十字为实际退让后的目标，绿色点为深度内点，紫色点为剔除样本。`--show` 使用浏览器，无桌面时只打印路径。分割、端部定位或拟合失败时保存失败 JSON；已读入图像且完成分割推理的失败也保留可视化，退出码为 1。
+同时生成 `*_endpoint_overlay.jpg`、`*_depth_fit_overlay.jpg` 和可离线查看的 `*_endpoint_review.html`。深度图复核图标出腐蚀掩膜、目标周围拟合候选范围、有效深度覆盖率、深度中位数、模型与拟合误差；绿色/紫色点分别表示拟合内点/剔除点，局部中位数兜底使用蓝色支持点。RGB 图显示全图与端部定位，HTML 还包含局部放大和基座系点云。`--show` 使用浏览器，无桌面时只打印路径。分割、端部定位或拟合失败时保存失败 JSON；已读入图像且完成分割推理的失败也保留可视化，退出码为 1。
 
 这一版只处理单帧，不进行实时跟踪、机械臂控制或松夹爪。3 mm 为待验证的物理误差目标。退让参数改变目标点的物理位置，验证其与头尾预设点的对应关系时应固定点位定义；不自动把退让后的点补偿回严格边缘。
 
@@ -323,11 +323,13 @@ python infer_groove_placement_single.py \
 
 输出 `*_groove_placement.json`、`*_groove_overlay.jpg`、`*_groove_review.html`，点云提取成功时还保存相机系可见点云 PLY。JSON 的 `allowed_frustum` 保存上下端面中心、半径和比例阈值；`placement_check` 保存 `inside_fraction`、`outside_fraction`、轴长、在内长度和轴线参数区间。HTML 内嵌 RGB 和 Plotly，可离线查看基座系观测点、配准 CAD、蓝色半透明允许圆台及轴线在内（绿色）和在外（红色）的部分。RGB 同时投影圆台线框。能读入 RGB 的失败也保存叠加图；输入尚不可用时 HTML 记录失败原因。
 
+配准成功后默认额外保存与 `infer_6d_single.py` 相同格式的 `*_point_cloud_comparison.ply` 和 `*_registration_review.html`，不需要增加命令行参数，入槽与未入槽结果均生成。两者使用 RGB 相机坐标系、单位为米：PLY 中绿色为观测点云、红色为已配准 CAD，黄色/青色/紫色点球分别标记抓取中心/尾部端面中心/头部端面中心；配准 HTML 提供全场景彩色点云、观测与 CAD 叠加、包围盒及语义点。JSON 的 `artifacts.point_cloud_comparison_ply` 和 `artifacts.registration_review_html` 记录路径，入槽复核 HTML 提供同目录文件链接；复制该页面时如需使用链接，应一并复制这两个文件。可视化导出失败会记录 `artifact_error`，不改变已经算出的入槽结论。
+
 不进行子集重复配准或额外稳定性检查。`seated` 仅表示本次估计满足几何判据，不代表已验证测量精度、实际接触或支撑力。当前圆台判据的四帧验证见 [圆台入槽检验验证报告](docs/groove-frustum-validation.md)，两正两负均符合标签；这四帧用于设计与调试，不构成独立泛化验证。[旧版六帧验证报告](docs/groove-placement-validation.md)记录的是此前 5 mm 最大端点距离判据及旧参考，保留作历史记录。
 
 ## 检测数据集与训练
 
-检测标注使用 LabelMe 矩形，标签 `0` 为 `gripper_with_plug`、`1` 为 `gripper_without_plug`。将原始数据放到 `检测标注（已标注）` 的各子目录后执行：
+检测标注使用 LabelMe 矩形，YOLO 类别为 `0: no_plug`、`1: stable_grasp`、`2: unstable_grasp`。旧标签 `0: gripper_with_plug` 映射为 `stable_grasp`，旧标签 `1: gripper_without_plug` 映射为 `no_plug`。将原始数据放到 `检测标注（已标注）` 的各子目录后执行：
 
 ```bash
 python tools/convert_gripper_detection.py \

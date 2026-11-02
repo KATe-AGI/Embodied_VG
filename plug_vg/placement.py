@@ -33,6 +33,8 @@ def load_placement(path: Path = DEFAULT_PLACEMENT) -> dict:
             raise ValueError(f"Endpoint setting must be an integer: {key}")
     if not 0 < endpoint["min_inlier_ratio"] <= 1:
         raise ValueError("min_inlier_ratio must be in (0,1]")
+    if not 0 < endpoint["min_valid_coverage"] <= 1:
+        raise ValueError("min_valid_coverage must be in (0,1]")
     if not 0 < endpoint["max_axis_angle_deg"] < 90:
         raise ValueError("max_axis_angle_deg must be in (0,90)")
     if endpoint["min_depth_m"] >= endpoint["max_depth_m"]:

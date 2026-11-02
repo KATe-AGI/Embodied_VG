@@ -13,7 +13,7 @@ import shutil
 
 from PIL import Image
 
-from convert_v01_detection import CLASS_NAMES, yolo_line
+from convert_v01_detection import CLASS_IDS, CLASS_NAMES, yolo_line
 
 
 def convert(source: Path, output: Path, seed: int = 42) -> dict:
@@ -81,12 +81,12 @@ def convert(source: Path, output: Path, seed: int = 42) -> dict:
         label_path.write_text('\n'.join(record['lines']) + ('\n' if record['lines'] else ''), encoding='utf-8')
         counts[split]['images'] += 1
         counts[split]['background_images'] += int(not record['lines'])
-        counts[split].update(f'class_{label}' for label in record['classes'])
+        counts[split].update(f'class_{CLASS_IDS[label]}' for label in record['classes'])
         manifest.append({'image': str(image.relative_to(source)),
                          'annotation': str(record['annotation'].relative_to(source)), 'split': split})
     (output / 'data.yaml').write_text(
         'path: .\ntrain: images/train\nval: images/val\n\nnames:\n'
-        '  0: gripper_with_plug\n  1: gripper_without_plug\n', encoding='utf-8')
+        '  0: no_plug\n  1: stable_grasp\n  2: unstable_grasp\n', encoding='utf-8')
     summary = {'source': str(source), 'seed': seed, 'train_ratio': 0.8,
                'images': len(records), 'excluded_unannotated_images': len(images) - len(records),
                'splits': {split: dict(count) for split, count in counts.items()}}
@@ -94,7 +94,7 @@ def convert(source: Path, output: Path, seed: int = 42) -> dict:
     (output / 'split_manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     (output / 'README.txt').write_text(
         'YOLO detection dataset from nested LabelMe rectangles.\n'
-        'Class 0: gripper_with_plug; class 1: gripper_without_plug.\n'
+        'Class 0: no_plug; class 1: stable_grasp; class 2: unstable_grasp.\n'
         'Only images with JSON annotations are included. Empty annotations are background samples.\n'
         f'Stratified 80/20 split, seed {seed}. See conversion_summary.json and split_manifest.json.\n', encoding='utf-8')
     return summary

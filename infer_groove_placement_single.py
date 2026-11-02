@@ -19,6 +19,7 @@ from plug_vg.geometry import project_point_float
 from plug_vg.grasp_model import (
     DEFAULT_GRASP_MODEL_CONFIG,
     load_grasp_model,
+    semantic_points_camera,
     transform_points,
 )
 from plug_vg.groove_placement import (
@@ -28,6 +29,10 @@ from plug_vg.groove_placement import (
 )
 from plug_vg.io import read_depth_raw, read_json, write_json
 from plug_vg.placement import DEFAULT_PLACEMENT, load_placement
+from plug_vg.registration_review import (
+    write_interactive_review_html,
+    write_registration_comparison_ply,
+)
 from plug_vg.robot_transform import (
     load_hand_eye_matrix,
     robot_pose_to_matrix,
@@ -37,6 +42,7 @@ from plug_vg.symmetric_registration import register_symmetric_points
 from plug_vg.visible_points import (
     extract_visible_points_from_mask,
     save_visible_points_ply,
+    synthesize_scene_point_cloud,
 )
 
 DEFAULT_WEIGHTS = (
@@ -96,6 +102,32 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Open the offline RGB/3D review in a browser.",
     )
     return parser.parse_args(argv)
+
+
+def save_registration_review(
+    result: dict,
+    image: np.ndarray,
+    depth: np.ndarray,
+    camera: dict,
+    visible_points: np.ndarray,
+    model_points: np.ndarray,
+    transform: np.ndarray,
+    semantic: dict,
+) -> None:
+    """Save the same camera-frame PLY/HTML registration artifacts as 6D inference."""
+    prefix = Path(result["artifacts"]["review_html"]).parent / Path(result["input"]["rgb"]).stem
+    comparison_path = Path(str(prefix) + "_point_cloud_comparison.ply")
+    write_registration_comparison_ply(
+        comparison_path, visible_points, model_points, transform, semantic
+    )
+    result["artifacts"]["point_cloud_comparison_ply"] = str(comparison_path)
+    scene_points, scene_colors = synthesize_scene_point_cloud(image, depth, camera, 0.1, 1.5)
+    review_path = Path(str(prefix) + "_registration_review.html")
+    write_interactive_review_html(
+        review_path, scene_points, scene_colors, visible_points, model_points,
+        transform, semantic, "ok", None, result["registration_quality"], 0, camera,
+    )
+    result["artifacts"]["registration_review_html"] = str(review_path)
 
 
 def save_review(
@@ -252,10 +284,19 @@ def save_review(
             "zaxis_title": "Base Z (m)",
         },
     )
+    registration_links = " ".join(
+        f'<a href="{html.escape(Path(result["artifacts"][key]).name, quote=True)}">{label}</a>'
+        for key, label in (
+            ("registration_review_html", "点云配准交互复核（相机系）"),
+            ("point_cloud_comparison_ply", "配准对比点云 PLY（相机系）"),
+        )
+        if key in result["artifacts"]
+    )
     document = (
         f'<!doctype html><html><head><meta charset="utf-8"><title>Groove placement</title></head>'
         f"<body><h2>{html.escape(LABELS[result['status']])}: {html.escape(title)}</h2>"
-        f"<p>{html.escape(result.get('reason', ''))}</p>{image_html}"
+        f"<p>{html.escape(result.get('reason', ''))}</p>"
+        f"<p>{registration_links}</p>{image_html}"
         "<p>Single observation; registration accuracy and physical contact are not verified.</p>"
         f"{figure.to_html(full_html=False, include_plotlyjs=True)}</body></html>"
     )
@@ -458,13 +499,22 @@ def run(args: argparse.Namespace) -> tuple[dict, Path]:
             is_seated=check["is_seated"],
             placement_check=check,
         )
+        try:
+            save_registration_review(
+                result, image, depth, camera, extraction.visible_points_camera_m,
+                grasp_model.points_grasp_m, transform,
+                semantic_points_camera(grasp_model.config, transform),
+            )
+        except (OSError, ValueError, ImportError) as exc:
+            # Export errors do not change the completed geometric decision.
+            result["artifact_error"] = str(exc)
     except (ValueError, OSError, KeyError, TypeError, ImportError, RuntimeError) as exc:
         result.update(status="unknown", is_seated=None, reason=str(exc))
     try:
         save_review(result, image, camera, t_base_camera, mask, points_base, cad_base)
     except (OSError, ValueError, ImportError) as exc:
         # Visualization failure must not discard the measured result JSON.
-        result["artifact_error"] = str(exc)
+        result["artifact_error"] = "; ".join(filter(None, [result.get("artifact_error"), str(exc)]))
         result["artifacts"] = {
             key: value
             for key, value in result["artifacts"].items()

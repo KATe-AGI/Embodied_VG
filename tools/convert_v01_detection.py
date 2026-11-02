@@ -12,7 +12,24 @@ from pathlib import Path
 
 IMAGE_WIDTH = 1920
 IMAGE_HEIGHT = 1080
-CLASS_NAMES = {"0": "gripper_with_plug", "1": "gripper_without_plug"}
+CLASS_NAMES = {
+    "0": "stable_grasp",
+    "1": "no_plug",
+    "stable_grasp": "stable_grasp",
+    "no_plug": "no_plug",
+    "gripper_with_plug": "stable_grasp",
+    "gripper_without_plug": "no_plug",
+    "unstable_grasp": "unstable_grasp",
+}
+CLASS_IDS = {
+    "0": 1,
+    "1": 0,
+    "no_plug": 0,
+    "stable_grasp": 1,
+    "gripper_with_plug": 1,
+    "gripper_without_plug": 0,
+    "unstable_grasp": 2,
+}
 
 
 def split_for(stem: str, train_ratio: float) -> str:
@@ -40,7 +57,7 @@ def yolo_line(label: str, points: list[list[float]], width: int, height: int) ->
     center_y = (y1 + y2) / 2.0 / height
     box_width = (x2 - x1) / width
     box_height = (y2 - y1) / height
-    return f"{int(label)} {center_x:.6f} {center_y:.6f} {box_width:.6f} {box_height:.6f}"
+    return f"{CLASS_IDS[label]} {center_x:.6f} {center_y:.6f} {box_width:.6f} {box_height:.6f}"
 
 
 def convert(source: Path, output: Path, train_ratio: float) -> dict[str, int]:
@@ -53,7 +70,7 @@ def convert(source: Path, output: Path, train_ratio: float) -> dict[str, int]:
         (output / "images" / split).mkdir(parents=True)
         (output / "labels" / split).mkdir(parents=True)
 
-    counts = {"images": 0, "train": 0, "val": 0, "class_0": 0, "class_1": 0}
+    counts = {"images": 0, "train": 0, "val": 0, "class_0": 0, "class_1": 0, "class_2": 0}
     for annotation_path in sorted(source.glob("*.json")):
         data = json.loads(annotation_path.read_text(encoding="utf-8"))
         image_path = source / str(data.get("imagePath", annotation_path.with_suffix(".png").name))
@@ -79,21 +96,23 @@ def convert(source: Path, output: Path, train_ratio: float) -> dict[str, int]:
         label_out.write_text(yolo_line(label, shape.get("points") or [], width, height) + "\n", encoding="utf-8")
         counts["images"] += 1
         counts[split] += 1
-        counts[f"class_{label}"] += 1
+        counts[f"class_{CLASS_IDS[label]}"] += 1
 
     yaml = (
         "path: .\n"
         "train: images/train\n"
         "val: images/val\n\n"
         "names:\n"
-        "  0: gripper_with_plug\n"
-        "  1: gripper_without_plug\n"
+        "  0: no_plug\n"
+        "  1: stable_grasp\n"
+        "  2: unstable_grasp\n"
     )
     (output / "data.yaml").write_text(yaml, encoding="utf-8")
     (output / "README.txt").write_text(
         "YOLO detection dataset converted from v01_成功1 LabelMe rectangles.\n"
-        "Class 0: gripper_with_plug\n"
-        "Class 1: gripper_without_plug\n",
+        "Class 0: no_plug\n"
+        "Class 1: stable_grasp\n"
+        "Class 2: unstable_grasp\n",
         encoding="utf-8",
     )
     return counts

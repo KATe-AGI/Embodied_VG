@@ -15,12 +15,14 @@ env/
 
 # Editor and OS noise
 .DS_Store
+__MACOSX/
 Thumbs.db
 .idea/
 .vscode/
 
 # Datasets and collected sensor data
 camera_data/
+train_data/
 插头放置判断/
 插拔装置模型/
 *.STEP

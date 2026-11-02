@@ -44,16 +44,26 @@ python infer_gripper_plug_single.py \
   --save-overlay
 '''
 
-DEFAULT_WEIGHTS = ROOT / "ultralytics" / "runs" / "detect" / "plug_yolo26n_det_20261009" / "weights" / "best.pt"
+DEFAULT_WEIGHTS = ROOT / "ultralytics" / "runs" / "detect" / "plug_yolo26n_det_20261030" / "weights" / "best.pt"
 DEFAULT_OUTPUT = ROOT / "ultralytics" / "runs" / "gripper_plug_single"
-CLASS_NAMES = {0: "gripper_with_plug", 1: "gripper_without_plug"}
+CLASS_NAMES = {
+    0: "no_plug",
+    1: "stable_grasp",
+    2: "unstable_grasp",
+}
+CLASS_ALIASES = {
+    "gripper_with_plug": "stable_grasp",
+    "gripper_without_plug": "no_plug",
+}
 CLASS_MESSAGES = {
-    "gripper_with_plug": "已抓住插头",
-    "gripper_without_plug": "未抓住插头",
+    "no_plug": "插头不存在",
+    "stable_grasp": "插头已抓稳",
+    "unstable_grasp": "插头未抓稳",
 }
 VISUAL_MESSAGES = {
-    "已抓住插头": "GRIPPER_WITH_PLUG",
-    "未抓住插头": "GRIPPER_WITHOUT_PLUG",
+    "插头不存在": "NO_PLUG",
+    "插头已抓稳": "STABLE_GRASP",
+    "插头未抓稳": "UNSTABLE_GRASP",
     "未检测到夹爪": "NO_GRIPPER",
 }
 
@@ -134,7 +144,9 @@ def choose_detection(result: Any) -> dict[str, Any] | None:
         model_class_name = model_names.get(class_id, class_id)
     else:
         model_class_name = model_names[class_id] if 0 <= class_id < len(model_names) else class_id
-    class_name = CLASS_NAMES.get(class_id, str(model_class_name))
+    class_name = CLASS_ALIASES.get(str(model_class_name), str(model_class_name))
+    if class_name == str(model_class_name):
+        class_name = CLASS_NAMES.get(class_id, class_name)
     return {
         "class_id": class_id,
         "class_name": class_name,
@@ -302,8 +314,9 @@ def process_video(
     frames: list[dict[str, Any]] = []
     class_counts = Counter(
         {
-            "gripper_with_plug": 0,
-            "gripper_without_plug": 0,
+            "no_plug": 0,
+            "stable_grasp": 0,
+            "unstable_grasp": 0,
             "no_detection": 0,
         }
     )
@@ -471,8 +484,9 @@ def process_live_stream(
     last_result: dict[str, Any] | None = None
     class_counts = Counter(
         {
-            "gripper_with_plug": 0,
-            "gripper_without_plug": 0,
+            "no_plug": 0,
+            "stable_grasp": 0,
+            "unstable_grasp": 0,
             "no_detection": 0,
         }
     )
@@ -615,8 +629,9 @@ def print_video_result(result: dict[str, Any], timing: dict[str, float], output_
     print(f"Frames: {video_info['frames_processed']}/{video_info['frames_read']}")
     print(
         "Class counts: "
-        f"gripper_with_plug={counts['gripper_with_plug']}, "
-        f"gripper_without_plug={counts['gripper_without_plug']}, "
+        f"no_plug={counts['no_plug']}, "
+        f"stable_grasp={counts['stable_grasp']}, "
+        f"unstable_grasp={counts['unstable_grasp']}, "
         f"no_detection={counts['no_detection']}"
     )
     print(f"Output directory: {output_dir}")
@@ -636,8 +651,9 @@ def print_live_result(result: dict[str, Any], timing: dict[str, float], output_d
     print(f"Frames: {video_info['frames_processed']}/{video_info['frames_read']}")
     print(
         "Class counts: "
-        f"gripper_with_plug={counts['gripper_with_plug']}, "
-        f"gripper_without_plug={counts['gripper_without_plug']}, "
+        f"no_plug={counts['no_plug']}, "
+        f"stable_grasp={counts['stable_grasp']}, "
+        f"unstable_grasp={counts['unstable_grasp']}, "
         f"no_detection={counts['no_detection']}"
     )
     print(f"Output directory: {output_dir}")

@@ -77,15 +77,26 @@ class EndpointTests(unittest.TestCase):
         self.assertEqual(fit['quality']['model'],'inverse_depth_quadratic')
         self.assertAlmostEqual(fit['point_camera_m'][2],.5,places=7)
 
-    def test_missing_depth_and_one_sided_support_rejected(self):
+    def test_missing_depth_rejected_and_one_sided_support_uses_median(self):
         location=locate_edge_point(self.mask,[0,-1],'plug_head',self.cfg)
         with self.assertRaisesRegex(ValueError,'Insufficient'):
             fit_local_depth(np.zeros(self.mask.shape),location,self.camera,self.cfg)
         depth=np.full(self.mask.shape,500.)
         _,v=location['target_pixel'].astype(int)
         depth[:v+1,:]=0
-        with self.assertRaisesRegex(ValueError,'extrapolation'):
-            fit_local_depth(depth,location,self.camera,self.cfg)
+        fit = fit_local_depth(depth,location,self.camera,self.cfg)
+        self.assertEqual(fit['quality']['model'], 'local_median')
+        self.assertAlmostEqual(fit['point_camera_m'][2], .5)
+
+    def test_median_fallback_without_any_surface_fit(self):
+        location = locate_edge_point(self.mask, [0, -1], 'plug_head', self.cfg)
+        depth = np.full(self.mask.shape, 500, dtype=np.uint16)
+        with patch('plug_vg.plug_endpoint._robust_model', side_effect=ValueError('no fit')):
+            fit = fit_local_depth(depth, location, self.camera, self.cfg)
+        self.assertEqual(fit['quality']['model'], 'local_median')
+        self.assertIsNone(fit['quality']['coefficients'])
+        self.assertEqual(fit['quality']['inlier_samples'], fit['quality']['valid_samples'])
+        self.assertAlmostEqual(fit['point_camera_m'][2], .5)
 
     def test_axis_mismatch_and_clipped_mask_rejected(self):
         with self.assertRaisesRegex(ValueError,'inconsistent'):
@@ -145,7 +156,12 @@ class EndpointTests(unittest.TestCase):
                 expected=(robot_pose_to_matrix(pose)@np.r_[result['point_camera_m'],1])[:3]
                 np.testing.assert_allclose(result['point_base_m'],expected,atol=1e-8)
                 self.assertEqual(json.loads(path.read_text())['status'],'ok')
+                depth_overlay = Path(result['artifacts']['depth_fit_overlay'])
+                self.assertTrue(depth_overlay.is_file())
+                rendered_depth = cv2.imread(str(depth_overlay))
+                self.assertGreater(rendered_depth.shape[0], 200)
                 page=Path(result['artifacts']['review_html']).read_text()
+                self.assertIn('Depth fit range and quality', page)
                 self.assertIn('data:image/jpeg;base64,',page)
                 self.assertIn('Plotly.newPlot',page)
                 if class_id==0:self.assertGreater(result['localization']['target_pixel'][1],155)

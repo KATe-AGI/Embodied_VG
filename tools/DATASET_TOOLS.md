@@ -71,7 +71,7 @@ python tools/merge_plug_datasets.py \
 
 ## 夹爪抓取状态检测数据集
 
-类别固定为 `0: gripper_with_plug`、`1: gripper_without_plug`，输入标注使用 LabelMe `rectangle`，输出标签为 YOLO 的 `class x_center y_center width height`，坐标归一化到图像尺寸。
+类别固定为 `0: no_plug`、`1: stable_grasp`、`2: unstable_grasp`，输入标注使用 LabelMe `rectangle`。旧标签 `0`（`gripper_with_plug`）映射为 `stable_grasp`，旧标签 `1`（`gripper_without_plug`）映射为 `no_plug`；`unstable_grasp` 映射为类别 `2`。输出标签为 YOLO 的 `class x_center y_center width height`，坐标归一化到图像尺寸。
 
 单目录 v01 数据的历史转换工具：
 

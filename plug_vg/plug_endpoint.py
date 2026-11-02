@@ -171,6 +171,14 @@ def fit_local_depth(depth_raw: np.ndarray, location: dict, camera: dict, cfg: di
     selected = ((xx-u)**2 + (yy-v)**2 <= radius**2) & (location["safe_mask"][y0:y1, x0:x1] > 0)
     z = depth[y0:y1, x0:x1]
     selected &= np.isfinite(z) & (z >= cfg["min_depth_m"]) & (z <= cfg["max_depth_m"])
+    candidate_pixels = int(np.count_nonzero(((xx-u)**2 + (yy-v)**2 <= radius**2) &
+                                             (location["safe_mask"][y0:y1, x0:x1] > 0)))
+    valid_coverage = float(np.count_nonzero(selected) / max(candidate_pixels, 1))
+    if valid_coverage < cfg["min_valid_coverage"]:
+        raise ValueError(
+            f"Insufficient depth coverage (invalid_depth_coverage): "
+            f"{valid_coverage:.3f} < {cfg['min_valid_coverage']:.3f}"
+        )
     pixels = np.column_stack([xx[selected], yy[selected]])
     z = z[selected]
     if len(z) < cfg["min_valid_points"] * 1.3:
@@ -195,24 +203,48 @@ def fit_local_depth(depth_raw: np.ndarray, location: dict, camera: dict, cfg: di
             candidates.append((degree, score))
         except ValueError:
             continue
-    if not candidates:
-        raise ValueError("Local depth models failed spatial holdout validation")
-    degree, score = candidates[0]
+    degree = None
+    score = None
+    if candidates:
+        degree, score = candidates[0]
     # Prefer a plane unless curvature materially improves held-out depth prediction.
-    for other_degree, other_score in candidates[1:]:
-        if other_score < score * 0.75:
-            degree, score = other_degree, other_score
-    if score > cfg["max_validation_rmse_m"]:
-        raise ValueError("Local depth validation RMSE exceeds limit")
-    beta, keep = _robust_model(xy, z, degree, cfg)
-    hull = cv2.convexHull(pixels[keep].astype(np.float32))
-    if cv2.pointPolygonTest(hull, tuple(map(float, target)), False) < 0:
-        raise ValueError("Target lacks surrounding inlier depth; refusing extrapolation")
-    prediction = 1 / (_design(xy[keep], degree) @ beta)
-    rmse = float(np.sqrt(np.mean((prediction-z[keep])**2)))
-    if rmse > cfg["max_fit_rmse_m"]:
-        raise ValueError("Local fit RMSE exceeds limit")
-    fitted_z = float(1 / beta[0])
+        for other_degree, other_score in candidates[1:]:
+            if other_score < score * 0.75:
+                degree, score = other_degree, other_score
+        if score > cfg["max_validation_rmse_m"]:
+            degree = None
+
+    method = "local_median"
+    keep = np.ones(len(z), dtype=bool)
+    beta = None
+    rmse = None
+    validation_rmse = None
+    fitted_z = float(np.median(z))
+    # A fitted surface is preferred, but it may not extrapolate safely to a
+    # target next to a depth hole. In that case use the robust local median,
+    # provided the observed surface is internally consistent.
+    if degree is not None:
+        try:
+            beta, keep = _robust_model(xy, z, degree, cfg)
+            hull = cv2.convexHull(pixels[keep].astype(np.float32))
+            if cv2.pointPolygonTest(hull, tuple(map(float, target)), False) >= 0:
+                prediction = 1 / (_design(xy[keep], degree) @ beta)
+                rmse = float(np.sqrt(np.mean((prediction-z[keep])**2)))
+                if rmse <= cfg["max_fit_rmse_m"]:
+                    fitted_z = float(1 / beta[0])
+                    method = "inverse_depth_plane" if degree == 1 else "inverse_depth_quadratic"
+                    validation_rmse = float(score)
+        except ValueError:
+            pass
+    median = float(np.median(z))
+    mad = float(np.median(np.abs(z - median)))
+    scaled_mad = 1.4826 * mad
+    if method == "local_median" and scaled_mad > cfg["max_fit_rmse_m"]:
+        raise ValueError(f"invalid_depth_consistency: scaled_mad={scaled_mad:.6f} m")
+    if method == "local_median":
+        keep = np.ones(len(z), dtype=bool)
+        rmse = None
+    fitted_z = float(fitted_z)
     if not np.isfinite(fitted_z) or not cfg["min_depth_m"] <= fitted_z <= cfg["max_depth_m"]:
         raise ValueError("Fitted target depth outside valid range")
     xyz = np.array([(u-camera["cx"])*fitted_z/camera["fx"],
@@ -221,9 +253,11 @@ def fit_local_depth(depth_raw: np.ndarray, location: dict, camera: dict, cfg: di
                                     (pixels[:, 1]-camera["cy"])*z/camera["fy"], z])
     return {"point_camera_m": xyz, "sample_pixels": pixels, "inlier_mask": keep,
             "sample_points_camera_m": sample_points,
-            "quality": {"model": "inverse_depth_plane" if degree == 1 else "inverse_depth_quadratic",
-                        "valid_samples": int(len(z)), "inlier_samples": int(keep.sum()),
+            "quality": {"model": method,
+                        "valid_samples": int(len(z)), "candidate_surface_pixels": candidate_pixels,
+                        "valid_coverage": valid_coverage, "inlier_samples": int(keep.sum()),
                         "inlier_ratio": float(keep.mean()), "fit_rmse_m": rmse,
-                        "validation_rmse_m": score, "target_inside_inlier_hull": True,
-                        "patch_radius_px": radius, "coefficients": beta.tolist(),
+                        "validation_rmse_m": validation_rmse, "target_inside_inlier_hull": method != "local_median",
+                        "depth_median_m": median, "depth_scaled_mad_m": scaled_mad,
+                        "patch_radius_px": radius, "coefficients": beta.tolist() if method != "local_median" else None,
                         "accuracy_goal_m": cfg["accuracy_goal_m"], "physical_accuracy_verified": False}}
