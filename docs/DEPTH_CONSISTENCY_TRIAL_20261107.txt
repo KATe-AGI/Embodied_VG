@@ -1,0 +1,62 @@
+FoundationPose-style 局部深度一致性剔除：单轮 benchmark（2026-11-07）
+
+single candidate run; fixed 5x5, 1mm, >80% bad neighbors, float32 NumPy; full original depth neighborhoods; no smoothing; 5px erosion preserved; compared with restored baseline single run with identical artifact export settings; references are pseudo labels
+当前默认仍为 none，试验未替换默认。此实现复现拒绝判据，未引入上游运行时或双边平滑。
+无效中心明确剔除；其他保留深度与点坐标不变。原始 mask 用于显示，缺失邻居不通过 mask 置零人为制造。
+每轮预热3帧；驻留模型；GPU同步计时。当前单轮不提供统计显著性结论。
+
+点云删除 63634/4744083 (1.341%)
+
+指标：原基线 -> 本次方法
+2mm_2deg: 161/176 (91.48%) -> 140/176 (79.55%)
+5mm_5deg: 167/176 (94.89%) -> 163/176 (92.61%)
+10mm_10deg: 171/176 (97.16%) -> 169/176 (96.02%)
+有效估计：176 -> 176
+grasp_error_mm
+  mean: 0.8910 -> 1.6847
+  p50: 0.0000 -> 0.7004
+  p95: 4.0983 -> 5.3707
+  rmse: 4.6230 -> 5.2404
+  max: 40.0660 -> 43.4326
+directed_axis_error_deg
+  mean: 0.4801 -> 1.4446
+  p50: 0.0000 -> 0.7475
+  p95: 1.8929 -> 4.3622
+  rmse: 2.4360 -> 3.1564
+  max: 23.0693 -> 23.2353
+grasp_axial_error_mm
+  mean: 0.5425 -> 0.9659
+  p50: 0.0000 -> 0.3307
+  p95: 3.4876 -> 3.6446
+  rmse: 2.6285 -> 2.8949
+  max: 24.6893 -> 24.6893
+grasp_lateral_error_mm
+  mean: 0.5169 -> 1.1166
+  p50: 0.0000 -> 0.4293
+  p95: 0.7872 -> 2.5260
+  rmse: 3.8030 -> 4.3682
+  max: 35.3870 -> 39.4726
+head_error_mm
+  mean: 1.0598 -> 2.8826
+  p50: 0.0000 -> 1.3915
+  p95: 5.6314 -> 9.9066
+  rmse: 4.7159 -> 6.3655
+  max: 36.8791 -> 40.2232
+tail_error_mm
+  mean: 1.2328 -> 2.6978
+  p50: 0.0000 -> 1.3494
+  p95: 5.2112 -> 7.6987
+  rmse: 6.6349 -> 7.4514
+  max: 65.6113 -> 70.3407
+original_156 5mm/5deg: 156/156 -> 152/156
+reregistered_20 5mm/5deg: 11/20 -> 11/20
+visible_points_ms: 19.390 -> 26.208
+registration_ms: 162.396 -> 160.483
+warm_online_inference_ms: 187.176 -> 192.057
+benchmark_call_wall_ms: 436.324 -> 440.767
+改善为通过：['20261027_144313_3066663_001_plug']
+退化为未通过：['20261027_140438_3052463_001_plug', '20261027_163232_3106261_001_plug', '20261104_163831_3080454_001_plug', '20260923_135544', '20260923_144812']
+
+参考为人工接受的算法伪真值，非独立物理测量。抓取点位置误差和有向长轴误差同时达标才计为联合通过。
+没有根据结果调整参数，也未将方法部署为默认。已有AprilTag原生库问题与本次无关，相关非AprilTag测试94项通过。
+输出路径：/home/stoor/桌面/LY/proj/Embodied_VG/output/camera_depth_consistency_20261107

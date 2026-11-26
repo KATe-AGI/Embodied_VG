@@ -1,0 +1,2 @@
+# Optional dependency for --point-filter bilateral, validated on Python 3.11 / Linux.
+CGAL==6.0.1.post202410241521

@@ -159,7 +159,7 @@ PowerShell 的换行符是反引号 `` ` ``，反引号后不要再放空格。
 
 - `--device 0` 指定 CUDA GPU，`--device cpu` 强制 CPU；
 - `--registration-method symmetric` 使用当前默认方法；`legacy` 保留旧 PCA/环特征/ICP 作为回归对照；
-- `--mask-erosion-px` 控制深度反投影前的掩膜内缩半径，默认 `5` 像素；
+- 默认已恢复原始点云预处理：5 px 掩膜腐蚀、有效深度筛选、反投影、4 mm 体素采样；不附加 edge_clean 过滤；
 - `--mad-z-threshold` 只影响 `legacy`；对称主线不使用全局相机 Z 轴 MAD；
 - `--save-overlay` 保存可见掩膜叠加图；
 - `--save-ply` 保存可见插头点云；
@@ -408,11 +408,20 @@ python tools/build_actual_plug_cad.py
 python infer.py --source test_20260703 --output ultralytics/runs/plug_stage1_seg_debug
 ```
 
-训练：
+插头头尾分割训练：
 
 ```bash
-python train.py --device 0
+conda activate embodiedvg
+python train.py \
+  --task segment \
+  --model ultralytics/yolo26n-seg.pt \
+  --data train_data/yolo-plug_head_and_tail_dataset/data.yaml \
+  --imgsz 640 --epochs 150 --batch 16 --patience 20 \
+  --device 0 \
+  --name plug_yolo26n_seg_20261116
 ```
+
+该数据集包含 `0: plug_head`、`1: plug_tail` 两个分割类别。2026-11-16 合并 `gripper_calibration-1116（已标注）.zip` 中的 87 张已标注图片，将确认的拼写错误 `plug_hand` 统一为 `plug_head`，排除 3 张未标注图片；合并后训练集 507 张、验证集 56 张，保留原有划分。合并明细见 `train_data/yolo-plug_head_and_tail_dataset/meta/merge_gripper_calibration_1116.json`。
 
 验证：
 
@@ -449,3 +458,11 @@ python evaluation/evaluate_camera_pose.py \
 - 单固定视角、近圆形端面和严重遮挡仍可能使有向长轴欠约束；`status=ok` 表示最佳有限估计，不代表低误差保证。
 - 当前 12 帧相机系人工真值只覆盖 `test_20260814`，上线前仍需扩大独立工况测试集，并继续检查 RGB 投影、交互 HTML 和红绿 PLY。
 - 没有逐帧真实机器人位姿时，重用同一 `--robot-pose` 只能用于相机系配准复核，不能用于声称基座系绝对精度。
+
+### 当前默认点云预处理（2026-11-07 回退）
+
+按用户要求，单帧、批量及评估入口默认恢复 `none`：掩膜内缩5px → 有效深度0.1–1.0m → 反投影 → 4mm体素质心采样 → 配准。symmetric 分支仍关闭全局Z-MAD。此前 edge_clean 方法保留用于显式实验，不再默认启用。
+`--save-ply` 仅导出配准点云；`--save-review` 导出配准对比及交互可视化；不生成完整清洁点云。原始 Scene 与 Coarse CAD 默认隐藏。
+历史实验输出保留；最新基线验证位于 `output/camera_restored_baseline_20261107`。
+
+Mask 可视化说明：`*_visible_mask.jpg` 与 `*_rgb_projection.jpg` 展示原始分割多边形。点云清理使用的深度有效像素掩码可能包含孔洞与缺口，不用于替代分割轮廓显示。2026-11-07 已修复两种掩码混用，并更新最新176帧的352张图；点云与位姿结果不变。

@@ -458,11 +458,11 @@ def write_interactive_review_html(
       </select>
     </div>
     <div class="checks">
-      <label><input id="layerScene" type="checkbox" checked> Scene</label>
-      <label><input id="layerVisible" type="checkbox" checked> Visible</label>
+      <label><input id="layerScene" type="checkbox"> Scene (raw)</label>
+      <label><input id="layerVisible" type="checkbox" checked> Registration input</label>
       <label><input id="layerModel" type="checkbox" checked> CAD</label>
       <label><input id="layerCadBox" type="checkbox" checked> CAD box</label>
-      <label><input id="layerCoarseCad" type="checkbox" checked> Coarse CAD</label>
+      <label><input id="layerCoarseCad" type="checkbox"> Coarse CAD</label>
       <label><input id="layerCamera" type="checkbox" checked> Camera</label>
       <label><input id="layerAxes" type="checkbox" checked> Axes</label>
       <label><input id="projectionMode" type="checkbox"> Perspective</label>
@@ -504,7 +504,7 @@ function setView(name) {{
 }}
 function activeGroup() {{ return data.registration; }}
 function setFocus(mode) {{ state.focusMode = mode; state.panX = 0; state.panY = 0; state.zoom = 1; draw(); }}
-function resetViewer() {{ state.focusMode = "all"; state.panX = 0; state.panY = 0; state.zoom = 1; setView("front"); ui.pointSize.value = "1"; ui.colorMode.value = "rgb"; for (const key of ["layerScene","layerVisible","layerModel","layerCadBox","layerCoarseCad","layerCamera","layerAxes"]) ui[key].checked = true; ui.projectionMode.checked = false; fillInfo(); draw(); }}
+function resetViewer() {{ state.focusMode = "all"; state.panX = 0; state.panY = 0; state.zoom = 1; setView("front"); ui.pointSize.value = "1"; ui.colorMode.value = "rgb"; for (const key of ["layerScene","layerVisible","layerModel","layerCadBox","layerCoarseCad","layerCamera","layerAxes"]) ui[key].checked = !["layerScene", "layerCoarseCad"].includes(key); ui.projectionMode.checked = false; fillInfo(); draw(); }}
 function row(k, v) {{ return `<div class="row"><div class="key">${{k}}</div><div class="value">${{v ?? "n/a"}}</div></div>`; }}
 function fmt(v, d=6) {{ return v === null || v === undefined || Number.isNaN(Number(v)) ? "n/a" : Number(v).toFixed(d); }}
 function fillInfo() {{

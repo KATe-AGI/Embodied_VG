@@ -30,7 +30,10 @@ def _semantic_array(record: dict[str, Any]) -> np.ndarray | None:
         return None
     points = []
     for name in SEMANTIC_NAMES:
-        value = np.asarray(semantic.get(f"{name}_camera_m"), dtype=np.float64)
+        try:
+            value = np.asarray(semantic.get(f"{name}_camera_m"), dtype=np.float64)
+        except (TypeError, ValueError):
+            return None
         if value.shape != (3,) or not np.all(np.isfinite(value)):
             return None
         points.append(value)
@@ -52,8 +55,18 @@ def evaluate_pair(ground_truth: dict[str, Any], prediction: dict[str, Any]) -> d
     errors_mm = np.linalg.norm(pred_points - gt_points, axis=1) * 1000.0
     gt_axis = gt_points[2] - gt_points[1]
     pred_axis = pred_points[2] - pred_points[1]
-    gt_axis /= np.linalg.norm(gt_axis)
-    pred_axis /= np.linalg.norm(pred_axis)
+    gt_axis_norm = float(np.linalg.norm(gt_axis))
+    pred_axis_norm = float(np.linalg.norm(pred_axis))
+    if gt_axis_norm < 1e-9:
+        raise ValueError("Ground truth head and tail must define a nonzero axis")
+    if pred_axis_norm < 1e-9:
+        return {
+            "prediction_status": prediction.get("status"),
+            "has_estimate": False,
+            "semantic_rmse_mm": None,
+        }
+    gt_axis /= gt_axis_norm
+    pred_axis /= pred_axis_norm
     directed_axis_error_deg = math.degrees(math.acos(float(np.clip(np.dot(gt_axis, pred_axis), -1.0, 1.0))))
 
     grasp_delta_mm = (pred_points[0] - gt_points[0]) * 1000.0

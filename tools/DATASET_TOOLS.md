@@ -92,6 +92,15 @@ python tools/convert_gripper_detection.py \
 
 该工具递归扫描 JSON，仅复制同目录下具有对应标注的图像，未标注图像不纳入输出。支持多个检测框；空 JSON 标注生成空标签文件并保留为背景样本。按类别分层分配训练/验证数量，总训练数量取图像总数的 80% 四舍五入。源图像和标注保留，输出目录必须不存在。
 
+向已有数据集追加新一批标注时加 `--append`，已有图像的训练/验证划分保持不变；新图像独立按类别进行 8:2 划分。工具会拒绝与已有图像重名的文件，并更新划分清单和统计。例如：
+
+```bash
+python tools/convert_gripper_detection.py \
+  --source 'train_data/标注数据（已标注）/1102（已标注）' \
+  --output 'train_data/检测标注（已标注）_yolo' \
+  --append
+```
+
 输出格式：
 
 ```text

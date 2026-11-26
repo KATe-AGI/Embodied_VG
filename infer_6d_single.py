@@ -7,7 +7,7 @@ import argparse
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import cv2
 import numpy as np
@@ -25,6 +25,7 @@ from plug_vg.config import DEFAULT_CAMERA, DEFAULT_SEG_WEIGHTS, load_camera  # n
 from plug_vg.geometry import polygon_mask, project_point_float, rotation_to_quaternion_xyzw  # noqa: E402
 from plug_vg.grasp_model import (  # noqa: E402
     DEFAULT_GRASP_MODEL_CONFIG,
+    GraspModel,
     axis_from_semantic_points,
     load_grasp_model,
     semantic_points_camera,
@@ -32,6 +33,7 @@ from plug_vg.grasp_model import (  # noqa: E402
 )
 from plug_vg.io import read_depth_raw, write_json  # noqa: E402
 from plug_vg.model_registration import register_visible_points  # noqa: E402
+from plug_vg.point_preprocessing import add_point_filter_arguments  # noqa: E402
 from plug_vg.registration_review import write_interactive_review_html, write_registration_comparison_ply  # noqa: E402
 from plug_vg.robot_transform import convert_camera_grasp_to_base, load_hand_eye_matrix, robot_pose_to_matrix, round_list  # noqa: E402
 from plug_vg.symmetric_registration import register_symmetric_points  # noqa: E402
@@ -50,21 +52,13 @@ r'''
 
 # Ubuntu / bash
 python infer_6d_single.py \
-  --rgb test_20260924/20260924_103741.png \
-  --d2rgb test_20260924/20260924_103741_d2rgb.npy \
+  --rgb test_data/plug_test_gt/imgs/20261103_145001_3317325_001_plug/rgb.png \
+  --d2rgb test_data/plug_test_gt/imgs/20261103_145001_3317325_001_plug/d2rgb.npy \
   --robot-pose -0.014293 0.460711 0.742759 2.167158 0.044541 -3.126827 \
-  --output-dir output/test_0924 \
+  --output-dir output/test_1104 \
   --save-ply \
   --save-review
 
-# Windows PowerShell
-python infer_6d_single.py `
-  --rgb test_20260701\20260701_155018_359_color.png `
-  --d2rgb test_20260701\20260701_155018_359_d2rgb.npy `
-  --robot-pose -0.014293 0.460711 0.742759 2.167158 0.044541 -3.126827 `
-  --output-dir output\plug_6d_single `
-  --save-ply `
-  --save-review
 '''
 
 DEFAULT_OUTPUT = ROOT / "ultralytics" / "runs" / "plug_6d_single"
@@ -72,7 +66,7 @@ DEFAULT_HAND_EYE = ROOT / "hand_eye_calibration" / "eye_hand_data" / "calib_2026
 DEFAULT_ROBOT_CONFIG = ROOT / "configs" / "robot" / "cs_robot.yaml"
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rgb", type=Path, required=True, help="RGB image path.")
     parser.add_argument("--d2rgb", type=Path, required=True, help="Registered D2RGB depth PNG/NPY path.")
@@ -80,11 +74,12 @@ def parse_args() -> argparse.Namespace:
         "--robot-pose",
         type=float,
         nargs=6,
-        required=True,
+        required=False,
         metavar=("X", "Y", "Z", "ROLL", "PITCH", "YAW"),
         help="Current robot end-effector pose T_base_end as x y z roll pitch yaw in meters/radians.",
     )
     parser.add_argument("--output-dir", type=Path, required=True, help="Directory for JSON and debug artifacts.")
+    parser.add_argument("--camera-only", action="store_true", help="Return camera-frame results without robot pose or hand-eye calibration.")
     parser.add_argument("--seg-weights", type=Path, default=DEFAULT_SEG_WEIGHTS, help="Visible-plug segmentation weights.")
     parser.add_argument("--model-config", type=Path, default=DEFAULT_GRASP_MODEL_CONFIG, help="Grasp-frame CAD model YAML.")
     parser.add_argument("--camera-config", type=Path, default=DEFAULT_CAMERA, help="RGB-D camera intrinsics YAML.")
@@ -105,6 +100,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--min-visible-points", type=int, default=200, help="Minimum visible D2RGB mask point count.")
     parser.add_argument("--voxel-size", type=float, default=0.004, help="Voxel size in meters for extraction/registration.")
+    add_point_filter_arguments(parser)
     parser.add_argument(
         "--mad-z-threshold",
         type=float,
@@ -127,7 +123,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--save-overlay", action="store_true", help="Save visible mask overlay.")
     parser.add_argument("--save-ply", action="store_true", help="Save visible plug point cloud PLY.")
     parser.add_argument("--save-review", action="store_true", help="Save interactive full-scene/CAD registration review HTML.")
-    return parser.parse_args()
+    args = parser.parse_args(argv)
+    if not args.camera_only and args.robot_pose is None:
+        parser.error("--robot-pose is required unless --camera-only is set")
+    return args
 
 
 def output_json_path(output_dir: Path, rgb_path: Path) -> Path:
@@ -160,7 +159,13 @@ def input_summary(args: argparse.Namespace) -> dict[str, Any]:
         "seg_weights": str(args.seg_weights),
         "model_config": str(args.model_config),
         "registration_method": str(args.registration_method),
-        "robot_pose_xyzrpy_m_rad": [float(v) for v in args.robot_pose],
+        "point_filter": getattr(args, "point_filter", "none"),
+        "sor_neighbors": getattr(args, "sor_neighbors", 20),
+        "sor_std_ratio": getattr(args, "sor_std_ratio", 6.0),
+        "bilateral_neighbors": getattr(args, "bilateral_neighbors", 20),
+        "bilateral_sharpness_angle": getattr(args, "bilateral_sharpness_angle", 15.),
+        "voxel_size_m": float(args.voxel_size),
+        "robot_pose_xyzrpy_m_rad": [float(v) for v in args.robot_pose] if args.robot_pose is not None else None,
     }
 
 
@@ -323,12 +328,15 @@ def _register_points(
 def print_result(result: dict[str, Any], output_path: Path) -> None:
     print(f"status: {result.get('status')}")
     if result.get("status") == "ok":
-        grasp_pose_base = result.get("grasp_pose_base") or {}
-        print(f"grasp_pose_base.robot_pose_xyzrpy_m_rad: {grasp_pose_base.get('robot_pose_xyzrpy_m_rad')}")
-        print(f"grasp_point_base_m: {result.get('grasp_point_base_m')}")
-        semantic_points_base = result.get("semantic_points_base") or {}
-        print(f"head_center_base_m: {semantic_points_base.get('head_center_base_m')}")
-        print(f"tail_center_base_m: {semantic_points_base.get('tail_center_base_m')}")
+        if result.get("grasp_pose_base"):
+            grasp_pose_base = result["grasp_pose_base"]
+            print(f"grasp_pose_base.robot_pose_xyzrpy_m_rad: {grasp_pose_base.get('robot_pose_xyzrpy_m_rad')}")
+            print(f"grasp_point_base_m: {result.get('grasp_point_base_m')}")
+            semantic_points_base = result.get("semantic_points_base") or {}
+            print(f"head_center_base_m: {semantic_points_base.get('head_center_base_m')}")
+            print(f"tail_center_base_m: {semantic_points_base.get('tail_center_base_m')}")
+        else:
+            print(f"grasp_point_camera_m: {(result.get('semantic_points_camera') or {}).get('grasp_center_camera_m')}")
     else:
         print(f"reason: {result.get('reason')}")
         quality = result.get("registration_quality") or {}
@@ -467,8 +475,15 @@ def _finalize_runtime(
     result["timing"] = _finalize_timing(timing, t0)
 
 
-def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
-    t0 = time.perf_counter()
+def run(
+    args: argparse.Namespace,
+    *,
+    seg_model: YOLO | None = None,
+    grasp_model: GraspModel | None = None,
+    timer: Callable[[], float] = time.perf_counter,
+) -> tuple[dict[str, Any], Path]:
+    """Run the same pipeline with optional resident assets and a synchronized timer."""
+    t0 = timer()
     timing: dict[str, float] = {}
     gpu_monitor = _start_gpu_memory_monitor(args.device)
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -500,17 +515,21 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
         return result, json_path
 
     camera = load_camera(args.camera_config)
-    t_end_camera = load_hand_eye_matrix(args.hand_eye_config)
-    t_base_end = robot_pose_to_matrix(args.robot_pose)
-    t_base_camera = t_base_end @ t_end_camera
+    if args.camera_only:
+        t_end_camera = t_base_end = t_base_camera = None
+    else:
+        t_end_camera = load_hand_eye_matrix(args.hand_eye_config)
+        t_base_end = robot_pose_to_matrix(args.robot_pose)
+        t_base_camera = t_base_end @ t_end_camera
 
-    stage_t0 = time.perf_counter()
-    seg_model = YOLO(str(args.seg_weights))
-    timing["model_load_s"] = round(time.perf_counter() - stage_t0, 6)
-    stage_t0 = time.perf_counter()
+    stage_t0 = timer()
+    if seg_model is None:
+        seg_model = YOLO(str(args.seg_weights))
+    timing["model_load_s"] = round(timer() - stage_t0, 6)
+    stage_t0 = timer()
     seg_items = run_segmentation(image, seg_model, args)
     seg_item = choose_segmentation(seg_items)
-    timing["segmentation_s"] = round(time.perf_counter() - stage_t0, 6)
+    timing["segmentation_s"] = round(timer() - stage_t0, 6)
     stage1_segmentation = _segmentation_summary(seg_item)
 
     if seg_item is None:
@@ -527,7 +546,7 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
 
     polygon = seg_item.get("polygon_xy") or seg_item.get("polygon")
     raw_mask = polygon_mask(polygon, depth.shape[:2])
-    stage_t0 = time.perf_counter()
+    stage_t0 = timer()
     # The symmetry-aware solver uses the eroded mask as a high-confidence
     # proposal core and the raw mask/depth for final visibility scoring.  A
     # global camera-Z MAD assumes a compact depth slab and removes valid plug
@@ -546,17 +565,24 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
         min_points=args.min_visible_points,
         mask_erosion_px=args.mask_erosion_px,
         mad_z_threshold=extraction_mad_z_threshold,
+        point_filter=getattr(args, "point_filter", "none"),
+        sor_neighbors=getattr(args, "sor_neighbors", 20),
+        sor_std_ratio=getattr(args, "sor_std_ratio", 6.0),
+        bilateral_neighbors=getattr(args, "bilateral_neighbors", 20),
+        bilateral_sharpness_angle=getattr(args, "bilateral_sharpness_angle", 15.),
     )
-    timing["visible_points_s"] = round(time.perf_counter() - stage_t0, 6)
+    timing["visible_points_s"] = round(timer() - stage_t0, 6)
     warnings = list(extraction.warnings)
     if args.save_overlay or args.save_review:
         overlay_path = args.output_dir / f"{args.rgb.stem}_visible_mask.jpg"
-        save_mask_overlay(image, extraction.mask, overlay_path)
+        # Show the segmentation outline, not holes from depth-validity filtering.
+        save_mask_overlay(image, raw_mask, overlay_path)
         artifacts["visible_mask"] = str(overlay_path)
     if args.save_ply or args.save_review:
         ply_path = args.output_dir / f"{args.rgb.stem}_visible_points.ply"
         save_visible_points_ply(extraction.visible_points_camera_m, ply_path)
         artifacts["visible_points_ply"] = str(ply_path)
+
 
     if extraction.status != "ok":
         result = make_failure(args, extraction.reason or "visible_point_extraction_failed", warnings)
@@ -569,8 +595,8 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
         write_json(json_path, result)
         return result, json_path
 
-    model = load_grasp_model(args.model_config)
-    stage_t0 = time.perf_counter()
+    model = grasp_model if grasp_model is not None else load_grasp_model(args.model_config)
+    stage_t0 = timer()
     reg_status, t_camera_grasp, registration_quality = _register_points(
         args,
         model.points_grasp_m,
@@ -579,13 +605,13 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
         depth,
         camera,
     )
-    timing["registration_s"] = round(time.perf_counter() - stage_t0, 6)
+    timing["registration_s"] = round(timer() - stage_t0, 6)
 
     semantic_camera_points = semantic_points_camera(model.config, t_camera_grasp) if t_camera_grasp is not None else None
     if args.save_review:
         if semantic_camera_points is not None:
             projection_path = args.output_dir / f"{args.rgb.stem}_rgb_projection.jpg"
-            _save_rgb_projection(image, extraction.mask, semantic_camera_points, camera, projection_path)
+            _save_rgb_projection(image, raw_mask, semantic_camera_points, camera, projection_path)
             artifacts["rgb_projection"] = str(projection_path)
         review_path = args.output_dir / f"{args.rgb.stem}_registration_review.html"
         _save_review(
@@ -632,8 +658,7 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
         write_json(json_path, result)
         return result, json_path
 
-    stage_t0 = time.perf_counter()
-    semantic_base_points = transform_semantic_points_to_base(semantic_camera_points, t_base_camera)
+    stage_t0 = timer()
     semantic_source = f"{model.config.get('model_id', 'plug')}_grasp_frame_semantic_points"
     result = {
         "status": "ok",
@@ -646,18 +671,20 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], Path]:
             "head_center_camera_m",
             semantic_source,
         ),
-        "semantic_points_base": semantic_base_points,
-        "grasp_point_base_m": semantic_base_points["grasp_center_base_m"],
-        "tail_to_head_axis_base": axis_from_semantic_points(
+        **common,
+    }
+    if not args.camera_only:
+        semantic_base_points = transform_semantic_points_to_base(semantic_camera_points, t_base_camera)
+        result["semantic_points_base"] = semantic_base_points
+        result["grasp_point_base_m"] = semantic_base_points["grasp_center_base_m"]
+        result["tail_to_head_axis_base"] = axis_from_semantic_points(
             semantic_base_points,
             "tail_center_base_m",
             "head_center_base_m",
             semantic_source,
-        ),
-        **common,
-    }
-    result = convert_camera_grasp_to_base(result, t_base_end, t_end_camera, args.hand_eye_config, args.robot_config)
-    timing["coordinate_transform_s"] = round(time.perf_counter() - stage_t0, 6)
+        )
+        result = convert_camera_grasp_to_base(result, t_base_end, t_end_camera, args.hand_eye_config, args.robot_config)
+    timing["coordinate_transform_s"] = round(timer() - stage_t0, 6)
     _finalize_runtime(result, timing, t0, gpu_monitor)
     write_json(json_path, result)
     return result, json_path

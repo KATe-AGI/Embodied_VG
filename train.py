@@ -18,7 +18,7 @@ if str(ULTRALYTICS_DIR) not in sys.path:
 from ultralytics import YOLO  # noqa: E402
 
 
-DATASET = ROOT / "yolo-plug_head_and_tail_dataset"
+DATASET = ROOT / "train_data" / "yolo-plug_head_and_tail_dataset"
 DEFAULT_MODEL = ULTRALYTICS_DIR / "yolo26n-seg.pt"
 DEFAULT_DATA = DATASET / "data.yaml"
 DEFAULT_PROJECT = ULTRALYTICS_DIR / "runs" / "segment"
