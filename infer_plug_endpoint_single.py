@@ -15,7 +15,13 @@ from infer_apriltag_cylinder import DEFAULT_HAND_EYE, show_visualization
 from plug_vg.config import DEFAULT_CAMERA, ROOT, load_camera
 from plug_vg.io import read_depth_raw, write_json
 from plug_vg.placement import DEFAULT_PLACEMENT, load_placement
-from plug_vg.plug_endpoint import choose_end_instance, fit_local_depth, locate_edge_point, projected_base_axis
+from plug_vg.plug_endpoint import (
+    choose_end_instance,
+    fit_local_depth,
+    locate_edge_point,
+    prepare_endpoint_image,
+    projected_base_axis,
+)
 from plug_vg.robot_transform import load_hand_eye_matrix, robot_pose_to_matrix, round_list
 
 DEFAULT_WEIGHTS = ROOT / "ultralytics/runs/segment/plug_yolo26n_seg_20260904/weights/best.pt"
@@ -259,10 +265,16 @@ def run(args: argparse.Namespace) -> tuple[dict, Path]:
     t_base_camera = t_base_end @ t_end_camera
     sys.path.insert(0, str(ROOT / "ultralytics"))
     from ultralytics import YOLO
+    from ultralytics.cfg import DEFAULT_CFG_DICT
 
+    prepared, roi = prepare_endpoint_image(image)
     model = YOLO(str(args.seg_weights))
-    prediction = model.predict(image, conf=args.conf, imgsz=args.imgsz, device=args.device,
-                               retina_masks=True, verbose=False)[0]
+    # Older YOLO26 releases select the inference head with end2end.
+    inference_head = {"end2end": True} if "end2end" in DEFAULT_CFG_DICT else {}
+    prediction = model.predict(
+        prepared, conf=args.conf, imgsz=args.imgsz, device=args.device,
+        retina_masks=True, nms=False, verbose=False, **inference_head,
+    )[0]
     args.output_dir.mkdir(parents=True, exist_ok=True)
     prefix = args.output_dir / args.rgb.stem
     path = Path(str(prefix) + "_plug_endpoint.json")
@@ -272,7 +284,8 @@ def run(args: argparse.Namespace) -> tuple[dict, Path]:
               "input": {"rgb": str(args.rgb), "d2rgb": str(args.d2rgb), "seg_weights": str(args.seg_weights),
                         "robot_pose_xyzrpy_m_rad": list(args.robot_pose), "pose_frame": "flange",
                         "camera_config": str(args.camera_config), "hand_eye_config": str(args.hand_eye_config),
-                        "placement_config": str(args.placement_config)},
+                        "placement_config": str(args.placement_config),
+                        "segmentation_roi_xyxy_px": list(roi)},
               "endpoint_settings": cfg,
               "frame_transform": {"T_base_end": round_list(t_base_end), "T_end_camera": round_list(t_end_camera),
                                   "T_base_camera": round_list(t_base_camera)},
@@ -283,8 +296,13 @@ def run(args: argparse.Namespace) -> tuple[dict, Path]:
     try:
         instance = choose_end_instance(prediction)
         result.update({key: value for key, value in instance.items() if key != "mask"})
-        direction = projected_base_axis(instance["mask"], depth, camera, t_base_camera, cfg)
-        location = locate_edge_point(instance["mask"], direction, instance["class_name"], cfg)
+        mask = instance["mask"]
+        left, top, right, bottom = roi
+        if (mask[:top + 1].any() or mask[bottom - 1:].any()
+                or mask[:, :left + 1].any() or mask[:, right - 1:].any()):
+            raise ValueError("Plug silhouette touches or extends beyond the segmentation ROI")
+        direction = projected_base_axis(mask, depth, camera, t_base_camera, cfg)
+        location = locate_edge_point(mask, direction, instance["class_name"], cfg)
         result["localization"] = {key: round_list(value) if isinstance(value, np.ndarray) else value
                                   for key, value in location.items() if key != "safe_mask"}
         fit = fit_local_depth(depth, location, camera, cfg)

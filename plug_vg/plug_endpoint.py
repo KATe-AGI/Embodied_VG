@@ -5,15 +5,30 @@ surface point, not an end-face center or the plug's axis center.
 """
 from __future__ import annotations
 
+from itertools import combinations
+
 import cv2
 import numpy as np
 
 from .visible_points import erode_mask
 
 
+DUPLICATE_MASK_IOU = 0.80
+
+
+def prepare_endpoint_image(image: np.ndarray) -> tuple[np.ndarray, tuple[int, int, int, int]]:
+    """Keep the central region at its original pixel coordinates on a gray canvas."""
+    height, width = image.shape[:2]
+    top, bottom = height * 12 // 100, height - height * 22 // 100
+    left, right = width * 40 // 100, width - width * 20 // 100
+    prepared = np.full_like(image, 114)
+    prepared[top:bottom, left:right] = image[top:bottom, left:right]
+    return prepared, (left, top, right, bottom)
+
+
 def choose_end_instance(result: object) -> dict:
-    """Keep model class identity; reject ambiguous single-plug observations."""
-    if result.masks is None or not len(result.boxes):
+    """Choose one endpoint after checking class agreement and pairwise mask overlap."""
+    if result.masks is None or result.boxes is None or not len(result.boxes):
         raise ValueError("No plug_head or plug_tail segmentation detected")
     matches = []
     for i, box in enumerate(result.boxes):
@@ -21,12 +36,33 @@ def choose_end_instance(result: object) -> dict:
         name = result.names[class_id]
         if name in ("plug_head", "plug_tail"):
             matches.append((i, class_id, name, float(box.conf.item())))
-    if len(matches) != 1:
-        raise ValueError(f"Expected one visible head/tail instance, detected {len(matches)}")
-    i, class_id, name, confidence = matches[0]
-    mask = result.masks.data[i].detach().cpu().numpy() > 0.5
-    if mask.shape != tuple(result.orig_shape):
+    if not matches:
+        raise ValueError("No plug_head or plug_tail segmentation detected")
+    if len({item[1] for item in matches}) != 1:
+        raise ValueError(f"Expected one visible head/tail instance, detected {len(matches)} across classes")
+
+    data = result.masks.data
+    if len(data) != len(result.boxes):
+        raise ValueError("Segmentation boxes and masks have different counts")
+    masks = data[[item[0] for item in matches]].detach().cpu().numpy() > 0.5
+    if masks.shape[1:] != tuple(result.orig_shape):
         raise ValueError("Segmentation mask resolution mismatch; enable retina_masks")
+    areas = np.count_nonzero(masks, axis=(1, 2))
+    if np.any(areas == 0):
+        raise ValueError("Empty segmentation mask")
+    for (first, first_area), (second, second_area) in combinations(zip(masks, areas), 2):
+        intersection = np.count_nonzero(first & second)
+        iou = intersection / (first_area + second_area - intersection)
+        if iou < DUPLICATE_MASK_IOU:
+            raise ValueError(
+                f"Expected one visible head/tail instance, detected {len(matches)} "
+                f"with mask IoU {iou:.3f} below {DUPLICATE_MASK_IOU:.2f}"
+            )
+
+    # max returns the first candidate at the highest confidence.
+    chosen = max(range(len(matches)), key=lambda index: matches[index][3])
+    _, class_id, name, confidence = matches[chosen]
+    mask = masks[chosen]
     # Tiny disconnected mask islands must not move the endpoint.
     count, labels, stats, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8), 8)
     if count < 2:
@@ -36,7 +72,8 @@ def choose_end_instance(result: object) -> dict:
     if largest.sum() < 0.9 * mask.sum():
         raise ValueError("Segmentation has substantial disconnected components")
     return {"class_id": class_id, "class_name": name, "confidence": confidence,
-            "mask": largest.astype(np.uint8), "removed_island_pixels": int(mask.sum() - largest.sum())}
+            "mask": largest.astype(np.uint8), "removed_island_pixels": int(mask.sum() - largest.sum()),
+            "segmentation_candidate_count": len(matches)}
 
 
 def projected_base_axis(mask: np.ndarray, depth_raw: np.ndarray, camera: dict,
@@ -59,6 +96,46 @@ def projected_base_axis(mask: np.ndarray, depth_raw: np.ndarray, camera: dict,
     if np.linalg.norm(direction) < 2:
         raise ValueError("Plug axis nearly points at camera; side edge is not reliably observable")
     return direction / np.linalg.norm(direction)
+
+
+def _terminal_contour_intersection(mask: np.ndarray, direction: np.ndarray,
+                                   transverse: np.ndarray, mid: float) -> np.ndarray:
+    """Return the target-facing exit of the longest interior segment on the axis."""
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    centerline = transverse * mid
+    longest = 0.0
+    exit_axial = None
+    for contour in contours:
+        points = contour.reshape(-1, 2).astype(float)
+        axial = points @ direction
+        offsets = points @ transverse - mid
+        # Vertices on the line also cover edges that lie along the line.
+        on_line = np.abs(offsets) <= 1e-9
+        offsets[on_line] = 0.0
+        next_offsets = np.roll(offsets, -1)
+        crossed = offsets * next_offsets < 0
+        fraction = offsets[crossed] / (offsets[crossed] - next_offsets[crossed])
+        next_axial = np.roll(axial, -1)
+        hits = axial[crossed] + fraction * (next_axial[crossed] - axial[crossed])
+        intersections = np.unique(np.concatenate((axial[on_line], hits)))
+        start = None
+        for lower, upper in zip(intersections[:-1], intersections[1:]):
+            if upper - lower <= 1e-9:
+                continue
+            midpoint = tuple(direction * ((lower + upper) / 2) + centerline)
+            if cv2.pointPolygonTest(contour, midpoint, False) <= 0:
+                start = None
+                continue
+            # An interior tangency splits the intersections, even as the segment stays inside.
+            if start is None:
+                start = lower
+            length = upper - start
+            if length > longest:
+                longest = length
+                exit_axial = upper
+    if exit_axial is None:
+        raise ValueError("Endpoint centerline does not cross the interior of the segmentation contour")
+    return direction * exit_axial + centerline
 
 
 def locate_edge_point(mask: np.ndarray, base_z_image: np.ndarray, class_name: str, cfg: dict) -> dict:
@@ -97,9 +174,7 @@ def locate_edge_point(mask: np.ndarray, base_z_image: np.ndarray, class_name: st
     if width < 6:
         raise ValueError("End edge too narrow")
     mid = (qlow + qhigh) / 2
-    center_strip = np.abs(lateral - mid) <= max(1.5, width * 0.08)
-    tip_axial = float(np.quantile(axial[center_strip], 0.99))
-    edge = direction * tip_axial + transverse * mid
+    edge = _terminal_contour_intersection(mask, direction, transverse, mid)
     safe = erode_mask(mask, int(cfg["mask_erosion_px"]))
     distance = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
     target = None
